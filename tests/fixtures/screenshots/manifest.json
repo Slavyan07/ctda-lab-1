@@ -1,0 +1,11 @@
+{
+  "source": "Actual offscreen QWidget.grab captures of the artificial TestWindow, standard Qt keyboard events; NOT Minecraft screenshots.",
+  "images": [
+    "initial.png",
+    "moved.png",
+    "inventory.png",
+    "hotbar3.png",
+    "verification.png",
+    "scaled.png"
+  ]
+}

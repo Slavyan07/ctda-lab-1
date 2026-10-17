@@ -11,7 +11,7 @@ SQLite history, Russian system TTS, notification hotkeys, capture/replay, Window
 Uncertain results remain pending or receive explicit manual confirmation. Pause/goal changes cancel
 in-flight requests and discard stale model responses.
 
-Validation: 93 passing tests, strict mypy, ruff, dependency checks, sdist/wheel build,
+Validation: 94 passing tests, strict mypy, ruff, dependency checks, sdist/wheel build,
 installed-wheel Qt human cycle and headless replay. Tests use saved synthetic screenshots and mocked
 API/capture/human actions. Actual LoliLand, Windows screen/audio devices and a live vision API were
 not exercised here; manual acceptance steps are documented in docs/acceptance.md.

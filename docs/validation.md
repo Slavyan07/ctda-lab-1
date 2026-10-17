@@ -4,7 +4,7 @@
 
 | Проверка | Результат |
 |---|---|
-| `QT_QPA_PLATFORM=offscreen .venv/bin/pytest -q` | **93 passed**, exit 0 |
+| `QT_QPA_PLATFORM=offscreen .venv/bin/pytest -q` | **94 passed**, exit 0 |
 | `mypy src`, strict | Success, 29 source files |
 | `ruff check .` / `ruff format --check .` | All checks passed |
 | `uv sync --locked --extra dev --python 3.11` / `uv pip check` | 33 установленных пакета согласованы |

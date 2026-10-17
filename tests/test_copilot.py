@@ -176,3 +176,50 @@ async def test_plan_editor_cannot_fabricate_completion(tmp_path, memory):
     data[0]["priority"] = 99
     engine.edit_plan(json.dumps(data))
     assert engine.goals.current.pending is None and engine.goals.current.steps[0].priority == 99
+
+
+async def test_exhausted_tasks_trigger_next_plan_stage_without_losing_progress(tmp_path, memory):
+    from loliland_agent.models import PlanProposal, PlanStep
+
+    class StagedProvider(DemoProvider):
+        def __init__(self):
+            self.plans = 0
+
+        async def plan(self, goal, observation, context):
+            self.plans += 1
+            if self.plans == 1:
+                return await super().plan(goal, observation, context)
+            assert goal.steps[0].status == "done"
+            return PlanProposal(
+                summary="Изучить следующий этап",
+                steps=(
+                    PlanStep(
+                        id="study-recipe",
+                        title="Изучить NEI",
+                        acceptance="Виден полный рецепт",
+                        depends_on=("show-inventory",),
+                    ),
+                ),
+                instruction=HumanInstruction(
+                    action="show_recipe",
+                    text="Покажи рецепт печи в NEI.",
+                    reason="Теперь известен инвентарь",
+                    expected="Рецепт с количествами",
+                    task_id="study-recipe",
+                    completes_task=True,
+                ),
+            )
+
+        async def instruct(self, *args):
+            raise AssertionError("Exhausted task list needs a new plan stage")
+
+    provider = StagedProvider()
+    engine, source, _ = service(tmp_path, memory, provider)
+    await engine.start("Создать переработку", 50, 0)
+    source.observation = frame("inventory.png")
+    engine.last_capture = 0
+    await engine.check(0)
+    goal = engine.goals.current
+    assert provider.plans == 2 and len(goal.steps) == 2
+    assert goal.steps[0].status == "done" and goal.steps[1].status == "active"
+    assert goal.pending.instruction.task_id == "study-recipe" and goal.confirmed_count == 1

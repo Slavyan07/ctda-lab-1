@@ -165,7 +165,15 @@ async def test_multimodal_copilot_human_loop_with_mock_api(tmp_path, memory):
         elif title == "PlanProposal":
             result = PlanProposal(
                 summary="Посмотреть запас",
-                steps=(PlanStep(id="a", title="Показать инвентарь", acceptance="Видны слоты"),),
+                steps=(
+                    PlanStep(id="a", title="Показать инвентарь", acceptance="Видны слоты"),
+                    PlanStep(
+                        id="b",
+                        title="Изучить рецепт",
+                        acceptance="Виден полный NEI-рецепт",
+                        depends_on=("a",),
+                    ),
+                ),
                 instruction=instruction().model_copy(update={"task_id": "a", "completes_task": True}),
             )
         else:

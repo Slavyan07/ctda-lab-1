@@ -96,6 +96,11 @@ class OfflineProvider:
 
 class DemoProvider(OfflineProvider):
     async def plan(self, goal: GoalState, observation: Observation, context: dict[str, Any]) -> PlanProposal:
+        if any(step.status == "done" for step in goal.steps):
+            return PlanProposal(
+                summary="DEMO: этап наблюдения завершён, нужен рецепт",
+                instruction=(await self.instruct(goal, observation, context)).instruction,
+            )
         return PlanProposal(
             summary="DEMO: проверка одного человеческого шага на искусственных изображениях",
             steps=(

@@ -203,7 +203,7 @@ class Copilot:
         if goal is None or goal.status != "active":
             self.snapshot()
             return
-        if make_plan:
+        if make_plan or not goal.steps or not self.goals.ready():
             proposal = await self.provider.plan(goal, observation, self.context())
             self.guard.check(revision)
             self.usage(proposal.usage)

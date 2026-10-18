@@ -65,7 +65,7 @@ class OfflineProvider:
 
     async def converse(self, text: str, context: dict[str, Any]) -> DialogueReply:
         return DialogueReply(
-            answer="Для свободного разговора подключите LLM в настройках API. Локальные команды паузы, продолжения и добавления задач работают без сети."
+            answer="Для свободного разговора включите локальный Ollama в разделе «Локальные модели». Локальные команды паузы, продолжения и добавления задач работают без сети."
         )
 
     async def summarize(self, context: dict[str, Any]) -> DialogueSummary:
@@ -84,7 +84,7 @@ class OfflineProvider:
             instruction=HumanInstruction(
                 action="show_screen",
                 text="Покажи игровой экран.",
-                reason="Vision API не настроен; скрытые данные неизвестны.",
+                reason="Локальная vision-модель не настроена; скрытые данные неизвестны.",
                 expected="Видимый игровой интерфейс",
             ),
         )
@@ -103,11 +103,11 @@ class OfflineProvider:
 
     async def chat(self, message: str, context: dict[str, Any]) -> ChatReply:
         return ChatReply(
-            answer="Offline: подключите мультимодальный API в настройках. Нейросеть сейчас не вызывается."
+            answer="Offline: подключите локальный Ollama в настройках. Нейросеть сейчас не вызывается."
         )
 
     async def extract_document(self, document: str, version: str) -> KnowledgeReply:
-        raise ProviderError("Для изучения документа нужен настроенный API")
+        raise ProviderError("Для изучения документа нужна локальная модель Ollama")
 
 
 class DemoProvider(OfflineProvider):
@@ -156,6 +156,8 @@ class OpenAICompatibleProvider:
     async def _request(
         self, instruction: str, schema: dict[str, Any], data: dict[str, Any], images: list[Observation]
     ) -> tuple[str, Usage]:
+        if self.settings.free_mode:
+            raise ProviderError("Облачный адаптер отключён в бесплатном режиме")
         content: list[dict[str, Any]] = [
             {
                 "type": "text",
@@ -230,6 +232,8 @@ class OpenAICompatibleProvider:
 
     async def converse(self, text: str, context: dict[str, Any]) -> DialogueReply:
         policy = """Have a natural Russian conversation as a thoughtful gaming partner. Discuss alternatives, explain tradeoffs, disagree with reasons, and admit unknown LoliLand recipes. Use shared goal, visual state, sourced recipes, resources, dialogue and preferences. Check observation_age_seconds: an old or missing image is not proof of the current screen; request a new observation when necessary.
+For explicit player reports of unlocked technologies, owned machines, raw resource identities or exact inventory counts, you may return facts_patch with only technologies:[strings], machines:[strings], raw_resources:[strings], resources:{inventory:{item:count}}. These are player reports, not image facts. Include an EXACT directive_quote from the message and intent report_resource (or correct_fact for explicit corrections). Never add anything the player did not say; unknown or ambiguous counts require clarification. Merge collection lists with previously reported ones unless explicitly corrected. Do not output facts_patch for hypotheses, suggestions or discussion.
+For explicit recipe corrections only, return intent correct_fact, recipe_correction with the full complete recipe stated by the player, evidence_text EXACTLY quoted from this message, and replace_recipe_ids from the stored recipe IDs. Never fill omitted amounts or ingredients from general Minecraft knowledge. If incomplete ask for the missing details.
 Classify intent. A suggestion like 'Может, сделаем реактор?' is suggest_plan and MUST NOT change a plan. Only an explicit user directive may request change_goal/add_task/replan/pause/resume/previous_goal/defer_task/prioritize, with an EXACT directive_quote from the current message. goal/task carry the requested description. Changes are only requested; the application validates and applies them. Never claim an action is completed before the application does it. 'Я закончил' requests done/check, not a verified completion. Return notes for important preferences, decisions, resource reports, corrections and locations. For non-assumption notes quote must be an EXACT substring of current user speech. Notes with the same key correct/replace earlier notes. Mark deductions as assumption. Never turn an AI opinion, summary or user report into image-proven inventory. Chat may contain discussion; do not issue multiple simultaneous gameplay instructions."""
         text_reply, usage = await self._request(
             policy, DialogueReply.model_json_schema(), {"message": text, "context": context}, []
@@ -341,6 +345,10 @@ class OpenAIProvider(OpenAICompatibleProvider):
 
 
 def make_provider(settings: Settings, client: httpx.AsyncClient) -> AIProvider:
+    if settings.provider == "ollama":
+        from loliland_agent.local.ollama import OllamaProvider
+
+        return OllamaProvider(settings, client)
     if settings.provider == "offline":
         return OfflineProvider()
     return (

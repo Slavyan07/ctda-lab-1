@@ -45,13 +45,13 @@ class VoicePanel(QWidget):
         w: QWidget
         layout = QVBoxLayout(self)
         self.privacy = QLabel(
-            "Микрофон выключен по умолчанию. Cloud STT отправляет запись API. PTT/кнопка «Перебить» прерывают голос; Hands-Free не слушает во время озвучки ИИ."
+            "Микрофон выключен по умолчанию. Whisper и Piper работают локально без API-ключей. PTT/кнопка «Перебить» прерывают голос; Hands-Free не слушает во время озвучки ИИ."
         )
         self.privacy.setWordWrap(True)
         layout.addWidget(self.privacy)
         form = QFormLayout()
         self.stt = QComboBox()
-        self.stt.addItems(["disabled", "cloud", "local"])
+        self.stt.addItems(["local", "disabled"] if settings.free_mode else ["disabled", "cloud", "local"])
         self.stt.setCurrentText(settings.stt_provider)
         self.mode = QComboBox()
         self.mode.addItems(["ptt", "hands_free"])
@@ -59,7 +59,7 @@ class VoicePanel(QWidget):
         self.microphone = QComboBox()
         self.output = QComboBox()
         self.tts = QComboBox()
-        self.tts.addItems(["system", "cloud"])
+        self.tts.addItems(["piper", "system"] if settings.free_mode else ["piper", "system", "cloud"])
         self.tts.setCurrentText(settings.tts_provider)
         self.voice = QComboBox()
         self.hotkey = QLineEdit(settings.ptt_hotkey)
@@ -79,11 +79,11 @@ class VoicePanel(QWidget):
         self.speed.setRange(50, 200)
         self.speed.setValue(int(settings.speech_rate * 100))
         for label, widget in [
-            ("STT: disabled / cloud / local", self.stt),
+            ("Распознавание речи", self.stt),
             ("Режим микрофона", self.mode),
             ("Микрофон", self.microphone),
-            ("TTS: system / cloud", self.tts),
-            ("Выход звука (cloud TTS)", self.output),
+            ("Синтез речи", self.tts),
+            ("Выход звука (Piper)", self.output),
             ("Голос ИИ", self.voice),
             ("Скорость речи: 0.5–2", self.speed),
             ("PTT, без перехвата клавиш", self.hotkey),
@@ -93,6 +93,9 @@ class VoicePanel(QWidget):
             ("Облачная TTS-модель", self.tts_model),
             ("Whisper CPU int8, 2 потока", self.local_model),
         ]:
+            if settings.free_mode and widget in (self.url, self.key, self.stt_model, self.tts_model):
+                widget.hide()
+                continue
             form.addRow(label, widget)
         layout.addLayout(form)
         layout.addWidget(self.download)

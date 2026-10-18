@@ -9,6 +9,7 @@ from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QObject, QThread, QUr
 from PySide6.QtMultimedia import QAudioDevice, QAudioOutput, QMediaPlayer
 
 from loliland_agent.config import Settings
+from loliland_agent.local.scheduler import BudgetError
 from loliland_agent.speech.devices import prepare_audio
 from loliland_agent.speech.stt import SpeechError, speech_key
 
@@ -20,6 +21,8 @@ VOICES = ["alloy", "ash", "ballad", "coral", "echo", "fable", "nova", "onyx", "s
 async def synthesize(
     settings: Settings, client: httpx.AsyncClient, text: str, voice: str, speed: float
 ) -> bytes:
+    if settings.free_mode:
+        raise SpeechError("Облачный синтез отключён в бесплатном режиме")
     try:
         async with client.stream(
             "POST",
@@ -94,7 +97,12 @@ class SynthesisWorker(QThread):
                     continue
                 if epoch != self.epoch:
                     continue
-                job = asyncio.create_task(synthesize(self.settings, client, text, voice, speed))
+                if self.settings.tts_provider == "piper":
+                    from loliland_agent.speech.piper import synthesize_piper
+
+                    job = asyncio.create_task(synthesize_piper(self.settings, text, speed))
+                else:
+                    job = asyncio.create_task(synthesize(self.settings, client, text, voice, speed))
                 try:
                     while not job.done():
                         if self.stopping.is_set() or epoch != self.epoch:
@@ -106,7 +114,7 @@ class SynthesisWorker(QThread):
                         self.ready.emit(data, epoch)
                 except asyncio.CancelledError:
                     pass
-                except SpeechError as error:
+                except (SpeechError, BudgetError) as error:
                     self.failed.emit(str(error), epoch)
                 except Exception:
                     self.failed.emit("Ошибка озвучки; текст остаётся доступен", epoch)
@@ -185,3 +193,17 @@ class CloudSpeech(QObject):
         self.buffer.open(QIODevice.OpenModeFlag.ReadOnly)
         self.player.setSourceDevice(self.buffer, QUrl("voice.wav"))
         self.player.play()
+
+
+class PiperSpeech(CloudSpeech):
+    reason = "Локальный Piper TTS: русский голос, без ключей и облачного синтеза"
+
+    def voice_names(self) -> list[str]:
+        from loliland_agent.local.models import VOICE
+
+        return [VOICE]
+
+    def select_voice(self, name: str) -> None:
+        from loliland_agent.local.models import VOICE
+
+        self.voice = VOICE

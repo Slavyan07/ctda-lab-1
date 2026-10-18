@@ -154,6 +154,7 @@ async def test_dialogue_cloud_contract_and_api_failure(memory):
     settings = Settings(
         _env_file=None,
         provider="compatible",
+        free_mode=False,
         api_key=SecretStr("test-key"),
         api_base_url="https://vision.example/v1",
     )

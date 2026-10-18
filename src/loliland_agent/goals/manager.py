@@ -101,7 +101,9 @@ class GoalManager:
         goal = self.current
         if goal is None:
             return ()
-        ids = {step.id for step in goal.steps if step.status in {"done", "paused"}}
+        ids = {
+            step.id for step in goal.steps if step.status in {"done", "paused"} or step.id.startswith("user-")
+        }
         by_id = {step.id: step for step in goal.steps}
         pending = list(ids)
         while pending:

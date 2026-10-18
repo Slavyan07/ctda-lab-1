@@ -76,14 +76,14 @@ async def test_cloud_stt_real_wav_wire_contract():
         )
         return httpx.Response(200, json={"text": "Может, сначала займёмся энергией?"})
 
-    settings = Settings(_env_file=None, speech_api_key=SecretStr("test-speech-key"))
+    settings = Settings(_env_file=None, free_mode=False, speech_api_key=SecretStr("test-speech-key"))
     async with httpx.AsyncClient(transport=httpx.MockTransport(response)) as client:
         assert "энергией" in await CloudSTT(settings, client).transcribe(pcm(seconds=0.4))
 
 
 @pytest.mark.parametrize("code", [401, 429, 500, 302])
 async def test_speech_api_failures_are_safe(code):
-    settings = Settings(_env_file=None, speech_api_key=SecretStr("test-speech-key"))
+    settings = Settings(_env_file=None, free_mode=False, speech_api_key=SecretStr("test-speech-key"))
     async with httpx.AsyncClient(
         transport=httpx.MockTransport(lambda _: httpx.Response(code, text="test-speech-key"))
     ) as client:
@@ -104,7 +104,7 @@ async def test_cloud_tts_wav_contract():
         assert body["voice"] == "coral" and body["speed"] == 1.25 and body["response_format"] == "wav"
         return httpx.Response(200, content=data)
 
-    settings = Settings(_env_file=None, speech_api_key=SecretStr("test-key"))
+    settings = Settings(_env_file=None, free_mode=False, speech_api_key=SecretStr("test-key"))
     async with httpx.AsyncClient(transport=httpx.MockTransport(response)) as client:
         assert await synthesize(settings, client, "Открой рецепт", "coral", 1.25) == data
 
@@ -113,7 +113,10 @@ def test_api_key_not_reused_for_another_speech_host():
     with pytest.raises(SpeechError):
         speech_key(
             Settings(
-                _env_file=None, api_key=SecretStr("key"), speech_api_base_url="https://another.example/v1"
+                _env_file=None,
+                free_mode=False,
+                api_key=SecretStr("key"),
+                speech_api_base_url="https://another.example/v1",
             )
         )
 
@@ -145,7 +148,9 @@ async def test_local_subprocess_transcribes_and_is_closed(tmp_path):
     program = (
         "import sys,json; [(print(json.dumps({'text':'Добавь склад'}),flush=True)) for line in sys.stdin]"
     )
-    engine = LocalWhisperSTT(Settings(_env_file=None), [sys.executable, "-u", "-c", program])
+    engine = LocalWhisperSTT(
+        Settings(_env_file=None, unload_after_request=False), [sys.executable, "-u", "-c", program]
+    )
     try:
         assert await engine.transcribe(pcm()) == "Добавь склад"
         process = engine.process
@@ -158,7 +163,9 @@ async def test_local_model_cancel_terminates_only_owned_subprocess():
     import sys
 
     program = "import sys,time; sys.stdin.readline(); time.sleep(60)"
-    engine = LocalWhisperSTT(Settings(_env_file=None), [sys.executable, "-u", "-c", program])
+    engine = LocalWhisperSTT(
+        Settings(_env_file=None, unload_after_request=False), [sys.executable, "-u", "-c", program]
+    )
     job = asyncio.create_task(engine.transcribe(pcm()))
     for _ in range(100):
         if engine.process is not None:
@@ -214,7 +221,7 @@ def test_synthesis_interrupt_discards_old_audio_and_stops(qapp, monkeypatch):
         return b"old audio"
 
     monkeypatch.setattr("loliland_agent.speech.cloud_tts.synthesize", slow)
-    worker = SynthesisWorker(Settings(_env_file=None))
+    worker = SynthesisWorker(Settings(_env_file=None, free_mode=False, tts_provider="cloud"))
     results = []
     worker.ready.connect(lambda *args: results.append(args))
     worker.start()

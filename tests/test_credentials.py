@@ -15,7 +15,10 @@ def test_saved_preferences_never_contain_api_keys(tmp_path, monkeypatch):
 
     monkeypatch.setattr("loliland_agent.speech.credentials.vault", lambda: Vault())
     settings = Settings(
-        _env_file=None, api_key=SecretStr("secret-llm"), speech_api_key=SecretStr("secret-speech")
+        _env_file=None,
+        free_mode=False,
+        api_key=SecretStr("secret-llm"),
+        speech_api_key=SecretStr("secret-speech"),
     )
     path = tmp_path / "settings.json"
     save_settings(settings, path)
@@ -26,4 +29,4 @@ def test_saved_preferences_never_contain_api_keys(tmp_path, monkeypatch):
 def test_corrupt_preferences_fall_back_safely(tmp_path):
     path = tmp_path / "settings.json"
     path.write_text("broken")
-    assert load_settings(path).provider == "offline"
+    assert load_settings(path).provider == "ollama"

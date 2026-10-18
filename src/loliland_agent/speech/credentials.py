@@ -27,11 +27,12 @@ def vault() -> Any:
 
 
 def save_settings(settings: Settings, path: Path = Path("data/settings.json")) -> None:
-    backend = vault()
-    for name in ("api_key", "speech_api_key"):
-        value = getattr(settings, name).get_secret_value()
-        if value:
-            backend.set_password(SERVICE, name, value)
+    if not settings.free_mode:
+        backend = vault()
+        for name in ("api_key", "speech_api_key"):
+            value = getattr(settings, name).get_secret_value()
+            if value:
+                backend.set_password(SERVICE, name, value)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(
@@ -58,7 +59,7 @@ def load_settings(path: Path = Path("data/settings.json")) -> Settings:
             data.pop("speech_api_key", None)
         except (ValueError, OSError, TypeError):
             data = {}
-    if sys.platform == "win32":
+    if sys.platform == "win32" and data.get("free_mode") is False:
         try:
             backend = vault()
             for name in ("api_key", "speech_api_key"):
@@ -70,4 +71,24 @@ def load_settings(path: Path = Path("data/settings.json")) -> Settings:
     for name in Settings.model_fields:
         if name.upper() in os.environ:
             data[name] = os.environ[name.upper()]
+    from dotenv import dotenv_values
+
+    file_values = {key.lower(): value for key, value in dotenv_values(".env").items() if value is not None}
+    data = {**file_values, **data}
+    if str(data.get("free_mode", "true")).lower() not in {"false", "0"}:
+        data["free_mode"] = True
+        data["api_key"] = SecretStr("")
+        data["speech_api_key"] = SecretStr("")
+        if data.get("provider") not in {"ollama", "offline"}:
+            data["provider"] = "ollama"
+        if data.get("model") not in {"qwen3-vl:4b", "qwen3-vl:2b"}:
+            data["model"] = "qwen3-vl:4b"
+        from urllib.parse import urlsplit
+
+        if urlsplit(str(data.get("api_base_url", ""))).hostname not in {"127.0.0.1", "localhost"}:
+            data["api_base_url"] = "http://127.0.0.1:11434/v1"
+        if data.get("tts_provider") not in {"piper", "system"}:
+            data["tts_provider"] = "piper"
+        if data.get("stt_provider") not in {"disabled", "local"}:
+            data["stt_provider"] = "local"
     return Settings(**data)

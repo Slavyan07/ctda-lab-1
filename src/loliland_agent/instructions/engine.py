@@ -13,6 +13,9 @@ from loliland_agent.config import Settings
 from loliland_agent.conversation.manager import conversation_context
 from loliland_agent.goals.manager import GoalManager
 from loliland_agent.instructions.verifier import CompletionVerifier
+from loliland_agent.learning.curriculum import AutomaticCurriculum
+from loliland_agent.learning.library import SkillLibrary
+from loliland_agent.learning.reflection import ReflectionManager
 from loliland_agent.memory import Memory
 from loliland_agent.models import (
     HumanInstruction,
@@ -88,8 +91,16 @@ class Copilot:
         self.emit({"kind": kind, **payload})
 
     def usage(self, value: Usage) -> None:
-        if self.provider.is_remote:
+        if self.provider.is_remote or getattr(self.provider, "is_local", False):
             self.memory.record_usage(value.input_tokens, value.output_tokens, value.cost_usd)
+
+    @property
+    def library(self) -> SkillLibrary:
+        return SkillLibrary(self.memory, self.knowledge.pack_version)
+
+    @property
+    def reflection(self) -> ReflectionManager:
+        return ReflectionManager(self.memory, self.knowledge.pack_version, self.settings.max_failed_attempts)
 
     def context(self) -> dict[str, Any]:
         goal = self.goals.current
@@ -108,6 +119,9 @@ class Copilot:
                 .model_dump(mode="json")
             )
         return {
+            "skills": self.library.context(goal.description if goal else ""),
+            "reflection": self.reflection.state(goal.id) if goal else None,
+            "human_loop": "OBSERVE → PLAN → EXPLAIN → HUMAN ACTS → VERIFY → REFLECT → CONTINUE",
             "conversation": conversation_context(self.memory),
             "pack_version": goal.pack_version if goal else self.settings.pack_version,
             "ready_tasks": [step.id for step in self.goals.ready()],
@@ -186,6 +200,11 @@ class Copilot:
         goal = self.goals.start(description, self.settings.pack_version, priority)
         self.publish("goal", {"id": goal.id, "description": goal.description})
         self.snapshot()
+        if self.reflection.blocked(goal.id):
+            self.goals.pause()
+            self.publish("notice", {"text": "Повторные ошибки: сначала исправьте рецепт, факты или план"})
+            self.snapshot()
+            return
         if goal.pending:
             self.publish(
                 "instruction",
@@ -207,10 +226,67 @@ class Copilot:
         if goal is None or goal.status != "active":
             self.snapshot()
             return
-        if make_plan or not goal.steps or not self.goals.ready():
+        if self.reflection.blocked(goal.id):
+            self.goals.pause()
+            self.publish(
+                "notice", {"text": "Лимит неудачных проверок: исправьте данные/план перед продолжением"}
+            )
+            self.snapshot()
+            return
+        if goal.target and self.resources.available().get(goal.target.item, 0) >= goal.target.count:
+            self.goals.pause()
+            self.publish(
+                "goal_review",
+                {
+                    "text": "Нужный предмет и количество подтверждены. Проверьте и завершите цель кнопкой «Цель достигнута»"
+                },
+            )
+            self.snapshot()
+            return
+        curriculum = AutomaticCurriculum(self.knowledge)
+        signature = curriculum.signature(goal, self.resources.available(), self.resources.facts())
+        user_ready = [step for step in self.goals.ready() if step.id.startswith("user-")]
+        if goal.target and user_ready and user_ready[0].priority >= goal.priority:
+            selected_task = user_ready[0]
+            reply = await self.provider.instruct(
+                goal,
+                observation,
+                {**self.context(), "selected_user_task": selected_task.model_dump(mode="json")},
+            )
+            self.guard.check(revision)
+            self.usage(reply.usage)
+            instruction = reply.instruction.model_copy(
+                update={
+                    "task_id": selected_task.id,
+                    "completes_task": reply.instruction.task_id == selected_task.id
+                    and reply.instruction.completes_task,
+                }
+            )
+        elif goal.target:
+            proposal = curriculum.propose(goal, self.resources.available(), self.resources.facts())
+            self.goals.set_plan(proposal)
+            self.memory.remember(
+                "curriculum", goal.id, {"signature": signature}, "confirmed_recipes_and_partial_observations"
+            )
+            instruction = proposal.instruction
+            self.publish("plan", {"summary": proposal.summary})
+        elif make_plan or not goal.steps or not self.goals.ready():
             proposal = await self.provider.plan(goal, observation, self.context())
             self.guard.check(revision)
             self.usage(proposal.usage)
+            if proposal.target:
+                provisional = goal.model_copy(update={"target": proposal.target})
+                proposal = curriculum.propose(provisional, self.resources.available(), self.resources.facts())
+                self.memory.remember(
+                    "curriculum",
+                    goal.id,
+                    {
+                        "signature": curriculum.signature(
+                            provisional, self.resources.available(), self.resources.facts()
+                        )
+                    },
+                    "confirmed_dependencies",
+                )
             self.goals.set_plan(proposal)
             instruction = proposal.instruction
             self.publish("plan", {"summary": proposal.summary})
@@ -226,6 +302,30 @@ class Copilot:
                         "text": "ИИ предлагает проверить достижение главной цели. Завершение подтверждает человек."
                     },
                 )
+        # Retrieval proposes human procedures only, with prerequisites checked again here.
+        if instruction.item:
+            facts = set(self.resources.facts().get("machines", [])) | set(
+                self.resources.facts().get("technologies", [])
+            )
+            for skill in self.library.search(instruction.item, reusable=True):
+                if (
+                    skill.topic == instruction.item
+                    and len(skill.steps) == 1
+                    and skill.steps[0].action == "manual_action"
+                    and skill.steps[0].item == instruction.item
+                    and skill.steps[0].count == instruction.count
+                    and set(skill.recipe_ids) <= {recipe.id for recipe in self.knowledge.all()}
+                    and set(skill.prerequisites) <= facts
+                    and instruction.action == "manual_action"
+                ):
+                    selected = self.library.use(skill.id, facts)
+                    instruction = selected.steps[0].model_copy(
+                        update={
+                            "task_id": instruction.task_id,
+                            "completes_task": len(selected.steps) == 1 and instruction.completes_task,
+                        }
+                    )
+                    break
         self._issue(instruction, observation)
         self.snapshot()
 
@@ -281,6 +381,16 @@ class Copilot:
         if result.usage.input_tokens or result.usage.output_tokens or result.usage.cost_usd is not None:
             self.usage(result.usage)
         self.publish("verification", {"instruction_id": pending.id, **result.model_dump(mode="json")})
+        if result.outcome != "confirmed":
+            report = self.reflection.record(goal.id, pending.instruction, result.outcome, result.evidence)
+            self.publish("reflection", report)
+            if self.reflection.blocked(goal.id):
+                self.goals.pause()
+                self.publish(
+                    "notice", {"text": "Повторные неудачные проверки: план приостановлен для исправления"}
+                )
+                self.snapshot()
+                return
         if result.requires_human:
             self.goals.pause()
             self.snapshot()
@@ -330,7 +440,18 @@ class Copilot:
                 )
 
     def _confirm(self, identifier: str, *, manual: bool, task_completed: bool, evidence: str) -> None:
+        goal = self.goals.current
+        assert goal is not None
         pending = self.goals.confirm(identifier, manual=manual, task_completed=task_completed)
+        report = self.reflection.record(
+            goal.id,
+            pending.instruction,
+            "confirmed",
+            evidence,
+            manual=manual,
+            task_completed=task_completed and pending.instruction.completes_task,
+        )
+        self.publish("reflection", report)
         self.publish(
             "confirmed",
             {
@@ -417,6 +538,7 @@ class Copilot:
                 confidence=1.0,
             ),
         )
+        self.reset_failed_attempts("explicit_recipe_update")
         self.publish("notice", {"text": "Подтверждённый пользователем рецепт сохранён"})
         self.snapshot()
 
@@ -425,7 +547,15 @@ class Copilot:
         if not isinstance(facts, dict):
             raise ValueError("Нужен JSON-объект")
         self.resources.set_facts(facts)
+        self.reset_failed_attempts("explicit_corrected_facts")
         self.snapshot()
+
+    def reset_failed_attempts(self, source: str) -> None:
+        if self.goals.current:
+            state = self.reflection.state(self.goals.current.id)
+            state["failures"] = 0
+            state["families"] = {}
+            self.memory.remember("reflection", self.goals.current.id, state, source)
 
     def edit_plan(self, text: str) -> None:
         from pydantic import TypeAdapter
@@ -443,5 +573,6 @@ class Copilot:
         ) or any(step.id not in {new.id for new in steps} for step in goal.steps if step.status == "done"):
             raise ValueError("Редактор не может подменять подтверждения или удалять выполненные шаги")
         self.goals.replace(goal.model_copy(update={"steps": steps, "pending": None}))
+        self.reset_failed_attempts("explicit_plan_edit")
         self.publish("notice", {"text": "План изменён пользователем; старая инструкция отменена"})
         self.snapshot()

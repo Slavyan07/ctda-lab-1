@@ -11,24 +11,35 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
-    provider: Literal["offline", "openai", "compatible", "ollama"] = "offline"
-    model: str = "gpt-4.1-mini"
-    api_base_url: str = "https://api.openai.com/v1"
+    provider: Literal["offline", "openai", "compatible", "ollama"] = "ollama"
+    model: str = "qwen3-vl:4b"
+    api_base_url: str = "http://127.0.0.1:11434/v1"
     api_key: SecretStr = SecretStr("")
     vision: bool = True
-    request_timeout: float = Field(default=45, ge=1, le=120)
+    request_timeout: float = Field(default=180, ge=1, le=600)
     interval_seconds: float = Field(default=8, ge=3, le=3600)
     analysis_cache_seconds: float = Field(default=30, ge=0, le=300)
+    free_mode: bool = True
+    ollama_num_ctx: int = Field(default=4096, ge=2048, le=8192)
+    ollama_num_predict: int = Field(default=1200, ge=256, le=2400)
+    ollama_num_gpu: int = Field(default=0, ge=0, le=12)
+    ollama_threads: int = Field(default=4, ge=1, le=8)
+    max_model_ram_mb: int = Field(default=5120, ge=1024, le=8192)
+    max_model_vram_mb: int = Field(default=1536, ge=0, le=4096)
+    min_free_ram_mb: int = Field(default=2048, ge=512, le=8192)
+    unload_after_request: bool = True
+    local_image_max_edge: int = Field(default=768, ge=384, le=1280)
+    max_failed_attempts: int = Field(default=3, ge=2, le=6)
     pack_version: str = Field(default="unspecified", min_length=1, max_length=250)
     speech_enabled: bool = False
     speech_volume: int = Field(default=80, ge=0, le=100)
     speech_rate: float = Field(default=1.0, ge=0.5, le=2)
-    tts_provider: Literal["system", "cloud"] = "system"
-    tts_voice: str = "coral"
+    tts_provider: Literal["system", "cloud", "piper"] = "piper"
+    tts_voice: str = "ru_RU-irina-medium"
     tts_model: str = "gpt-4o-mini-tts"
     speech_api_base_url: str = "https://api.openai.com/v1"
     speech_api_key: SecretStr = SecretStr("")
-    stt_provider: Literal["disabled", "cloud", "local"] = "disabled"
+    stt_provider: Literal["disabled", "cloud", "local"] = "local"
     stt_model: str = "gpt-4o-mini-transcribe"
     whisper_model: Literal["tiny", "base"] = "tiny"
     allow_model_download: bool = False
@@ -58,6 +69,17 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_provider(self) -> Settings:
+        if self.free_mode:
+            if (
+                self.provider not in {"ollama", "offline"}
+                or self.stt_provider == "cloud"
+                or self.tts_provider == "cloud"
+            ):
+                raise ValueError(
+                    "Free mode permits local Ollama/Whisper/Piper only; cloud fallback is disabled"
+                )
+            if self.provider == "ollama" and self.model not in {"qwen3-vl:4b", "qwen3-vl:2b"}:
+                raise ValueError("Choose qwen3-vl:4b or qwen3-vl:2b")
         speech_url = urlsplit(self.speech_api_base_url)
         if (
             not speech_url.hostname

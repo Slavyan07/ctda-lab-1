@@ -1,12 +1,18 @@
-# LoliLand AI Copilot 0.4
+# LoliLand AI Copilot 0.5
 
-Голосовой AI-напарник для Windows 11: свободный русский диалог, визуальное планирование,
-общая память и пошаговые инструкции. Все действия в Minecraft выполняет человек.
+Бесплатный локальный AI-напарник для Windows 11. Читает экран, разговаривает по-русски, планирует развитие и выдаёт инструкции. **Все игровые действия выполняет человек.** Клиент и лаунчер LoliLand остаются неизменными.
 
-Доставка — **LoliLand_AI_Copilot_Windows.zip**, Git для установки и обновления не нужен.
+- Зрение и диалог: **Ollama, qwen3-vl:4b**, облегчённый вариант **qwen3-vl:2b**.
+- Русская речь: **faster-whisper CPU int8** и **Piper ru_RU-irina-medium CPU**.
+- Планировщик зависимостей, адаптивная программа задач, SQLite-библиотека человеческих процедур, самопроверка и сохранение прогресса.
+- По умолчанию `FREE_MODE=true`: ключи, подписки и облачная обработка не нужны. Платного резервного маршрута нет.
 
-Начните с [README_RU.md](README_RU.md) и [WINDOWS_SETUP.md](WINDOWS_SETUP.md).
+Распакуйте `LoliLand_AI_Copilot_Windows.zip`, установите Python 3.11 x64 и [Ollama](https://ollama.com/download/windows), выполните `install.bat`, `start_ollama.bat`, `download_models.bat`, затем `start.bat`. Git не требуется. Веса моделей скачиваются отдельно только по запросу и в ZIP не входят.
 
-Разработка: Python 3.11, `uv sync --locked --extra dev`, `uv run ruff check .`,
-`uv run ruff format --check .`, `uv run mypy src`, `QT_QPA_PLATFORM=offscreen uv run pytest -q`.
-Сборка без Git: `python tools/build_zip.py LoliLand_AI_Copilot_Windows.zip`.
+Подробности: [WINDOWS_SETUP.md](WINDOWS_SETUP.md), [русское руководство](README_RU.md), [адаптация Voyager](docs/voyager.md), [результаты проверок](docs/validation.md).
+
+Цикл: **OBSERVE → PLAN → EXPLAIN → HUMAN ACTS → VERIFY → REFLECT → CONTINUE**.
+
+Это реализация принципов Voyager для советов человеку. Mineflayer, Forge, Fabric, JavaScript управления игрой, ввод мыши/клавиатуры в Minecraft и чтение его памяти отсутствуют. F8 ставит Copilot на паузу; F9 запрашивает наблюдение; F10 повторяет сообщение. Есть DEMO с искусственными кадрами.
+
+Автотесты проверяют код, сохранённые искусственные скриншоты и mock-интерфейсы локальных моделей. Реальный LoliLand, качество Qwen/Whisper/Piper и физическое аудио Windows в облачной среде не проверены. Система не объявляется проверенной на вашем ПК до аппаратной проверки по инструкции.

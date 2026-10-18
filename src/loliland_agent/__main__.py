@@ -46,7 +46,7 @@ async def headless(settings: Settings, recording: Path, goal: str) -> None:
         async with httpx.AsyncClient(trust_env=False) as client:
             service = Copilot(settings, memory, make_provider(settings, client), source, emit)
             await service.start(goal, 50, 0)
-            while True:
+            while service.goals.current and service.goals.current.status == "active":
                 await service.check(0)
     except ReplayEnded:
         pass
@@ -76,7 +76,9 @@ def main() -> int:
     try:
         settings = load_settings()
     except ValidationError:
-        print("Ошибка .env: проверьте провайдера, HTTPS URL, API_KEY и VISION. Значения скрыты.")
+        print(
+            "Ошибка настроек: проверьте локальную модель, адрес Ollama и VISION. В бесплатном режиме ключи не нужны."
+        )
         return 2
     configure_logging()
     if args.headless:
@@ -85,7 +87,7 @@ def main() -> int:
         except KeyboardInterrupt:
             return 130
         except Exception as error:
-            print(f"Операция не выполнена ({type(error).__name__}); проверьте запись и настройки API.")
+            print(f"Операция не выполнена ({type(error).__name__}); проверьте запись и локальный Ollama.")
             return 1
         return 0
     from loliland_agent.ui.app import launch

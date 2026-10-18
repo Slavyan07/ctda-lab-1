@@ -24,6 +24,9 @@ FILES = {
     "install_local_stt.bat",
     "start.bat",
     "check.bat",
+    "start_ollama.bat",
+    "download_models.bat",
+    "THIRD_PARTY_NOTICES.md",
 }
 DIRECTORIES = {"src", "tests", "examples", "docs", "scripts", "tools"}
 EXCLUDE = {
@@ -74,9 +77,9 @@ def build(destination: Path) -> None:
     entries["BUILD_INFO.json"] = json.dumps(
         {
             "product": "LoliLand AI Copilot",
-            "version": "0.4.0",
+            "version": "0.5.0",
             "python": "3.11 x64",
-            "delivery": "Source ZIP + Windows installers; Internet required for dependencies/API; local voice model optional and opt-in",
+            "delivery": "Source ZIP + Windows installers; free local inference; Internet needed for initial dependencies and opt-in model downloads; weights not bundled",
         },
         ensure_ascii=False,
         indent=2,

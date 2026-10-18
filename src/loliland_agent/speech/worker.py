@@ -8,6 +8,7 @@ import httpx
 from PySide6.QtCore import QThread, Signal
 
 from loliland_agent.config import Settings
+from loliland_agent.local.scheduler import BudgetError
 from loliland_agent.speech.stt import CloudSTT, LocalWhisperSTT, SpeechError, Transcriber
 
 
@@ -68,7 +69,7 @@ class RecognitionWorker(QThread):
                             self.updated.emit({"kind": "transcript", "text": text})
                     except asyncio.CancelledError:
                         pass
-                    except SpeechError as error:
+                    except (SpeechError, BudgetError) as error:
                         self.updated.emit({"kind": "error", "text": str(error)})
                     except Exception:
                         self.updated.emit(

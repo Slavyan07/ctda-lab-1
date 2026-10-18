@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import threading
 import time
@@ -34,6 +35,17 @@ class Memory:
           id INTEGER PRIMARY KEY, at REAL NOT NULL, role TEXT NOT NULL, channel TEXT NOT NULL, text TEXT NOT NULL);
         PRAGMA user_version=2;
         """)
+        try:
+            self._db.execute(
+                "CREATE VIRTUAL TABLE IF NOT EXISTS skill_search USING fts5(category UNINDEXED, name UNINDEXED, text, tokenize='unicode61')"
+            )
+            self._db.execute("DELETE FROM skill_search")
+            self._db.execute(
+                "INSERT INTO skill_search(category,name,text) SELECT category,name,payload FROM knowledge WHERE category LIKE 'skills:%'"
+            )
+            self._fts = True
+        except sqlite3.OperationalError:
+            self._fts = False
         # Legacy goal rows remain paused after an interrupted session.
         with self._db:
             self._db.execute("UPDATE goals SET status='paused' WHERE status='active'")
@@ -97,6 +109,27 @@ class Memory:
                 "INSERT INTO knowledge VALUES (?,?,?,?,?) ON CONFLICT(category,name) DO UPDATE SET payload=excluded.payload, source=excluded.source, updated=excluded.updated",
                 (category, name, json.dumps(payload, ensure_ascii=False), source, time.time()),
             )
+            if self._fts and category.startswith("skills:"):
+                self._db.execute("DELETE FROM skill_search WHERE category=? AND name=?", (category, name))
+                self._db.execute(
+                    "INSERT INTO skill_search(category,name,text) VALUES (?,?,?)",
+                    (category, name, json.dumps(payload, ensure_ascii=False)),
+                )
+
+    def search_knowledge(self, category: str, query: str, limit: int = 40) -> list[dict[str, Any]]:
+        terms = re.findall(r"\w+", query.casefold())[:30]
+        if not terms or not self._fts:
+            return self.list_knowledge(category)
+        match = " OR ".join('"' + term + '"' for term in terms)
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT k.name,k.payload,k.source,k.updated FROM skill_search s JOIN knowledge k ON k.category=s.category AND k.name=s.name WHERE skill_search MATCH ? AND s.category=? ORDER BY rank LIMIT ?",
+                (match, category, max(1, min(limit, 200))),
+            ).fetchall()
+            return [
+                {"name": row[0], "value": json.loads(row[1]), "source": row[2], "updated": row[3]}
+                for row in rows
+            ]
 
     def recall(self, category: str, name: str) -> dict[str, Any] | None:
         with self._lock:

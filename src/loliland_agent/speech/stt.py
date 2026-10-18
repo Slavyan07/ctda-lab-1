@@ -34,6 +34,8 @@ def wav_bytes(pcm: bytes) -> bytes:
 
 
 def speech_key(settings: Settings) -> str:
+    if settings.free_mode:
+        raise SpeechError("Облачная речь отключена: используйте локальные Whisper и Piper")
     key = settings.speech_api_key.get_secret_value()
     if (
         not key
@@ -89,6 +91,16 @@ class LocalWhisperSTT:
         self.process: asyncio.subprocess.Process | None = None
 
     async def transcribe(self, pcm: bytes) -> str:
+        from loliland_agent.local.scheduler import HEAVY
+
+        async with HEAVY.lease("Whisper CPU", self.settings.min_free_ram_mb):
+            try:
+                return await self._transcribe(pcm)
+            finally:
+                if self.settings.unload_after_request:
+                    await self.close()
+
+    async def _transcribe(self, pcm: bytes) -> str:
         import base64
         import json
         import subprocess

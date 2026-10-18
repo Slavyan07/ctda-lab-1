@@ -16,13 +16,30 @@ def main() -> int:
     if sys.version_info[:2] != (3, 11) or sys.maxsize <= 2**32:
         print("Нужен Python 3.11 x64.")
         return 1
-    for name in ("pydantic", "httpx", "PIL", "mss", "PySide6.QtWidgets", "keyring"):
+    for name in (
+        "pydantic",
+        "httpx",
+        "PIL",
+        "mss",
+        "PySide6.QtWidgets",
+        "keyring",
+        "faster_whisper",
+        "piper",
+        "onnxruntime",
+    ):
         try:
             importlib.import_module(name)
         except Exception:
             print(f"Не удалось загрузить зависимость {name}; повторите install.bat.")
             return 1
-    print("Основные зависимости Copilot доступны.")
+    from loliland_agent.speech.credentials import load_settings
+
+    settings = load_settings()
+    if not settings.free_mode:
+        print("Внимание: FREE_MODE выключен. Для бесплатного режима включите его.")
+        return 1
+    print("Локальный режим без API-ключей: Ollama / Whisper / Piper. Зависимости доступны.")
+    print("Модели проверяются отдельно: python -m loliland_agent.local.models status")
     if args.no_audio:
         print("Физические аудиоустройства не проверялись (--no-audio).")
         return 0

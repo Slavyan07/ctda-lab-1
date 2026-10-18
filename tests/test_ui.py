@@ -27,7 +27,13 @@ def close(qapp, window):
 
 def test_desktop_human_cycle_pause_and_resume(qapp, tmp_path):
     window = MainWindow(
-        Settings(_env_file=None, database_path=tmp_path / "copilot.db", interval_seconds=3),
+        Settings(
+            _env_file=None,
+            provider="offline",
+            tts_provider="system",
+            database_path=tmp_path / "copilot.db",
+            interval_seconds=3,
+        ),
         demo=True,
         speech_backend=SilentSpeech(),
     )
@@ -56,7 +62,9 @@ def test_desktop_human_cycle_pause_and_resume(qapp, tmp_path):
 
 def test_window_closes_during_pending_work(qapp, tmp_path):
     window = MainWindow(
-        Settings(_env_file=None, database_path=tmp_path / "close.db"),
+        Settings(
+            _env_file=None, provider="offline", tts_provider="system", database_path=tmp_path / "close.db"
+        ),
         demo=True,
         speech_backend=SilentSpeech(),
     )

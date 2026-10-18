@@ -4,6 +4,7 @@ import re
 from typing import Any
 
 from loliland_agent.conversation.models import DialogueNote, DialogueReply
+from loliland_agent.learning.library import SkillLibrary
 from loliland_agent.memory import Memory
 from loliland_agent.planning.providers import AIProvider
 from loliland_agent.recipes.planner import RecipeKnowledgeBase
@@ -26,6 +27,7 @@ MUTATING = {
     "previous_goal",
     "defer_task",
     "prioritize",
+    "correct_fact",
 }
 
 
@@ -86,6 +88,10 @@ def local_command(text: str) -> DialogueReply | None:
             directive_quote=text,
             answer="Передам новый приоритет текущей цели.",
         )
+    if re.match(r"исправь\s+рецепт", normalized) or re.search(
+        r"^запомни.*(?:технолог|механизм|машин|инвентар|ресурс)", normalized
+    ):
+        return None
     if re.match(r"(?:запомни|исправь|предпочитаю)\b", normalized):
         import hashlib
 
@@ -140,6 +146,9 @@ class ConversationManager:
                         for recipe in RecipeKnowledgeBase(self.memory, goal["pack_version"]).all()
                     ],
                 }
+        version = (context.get("goal") or {}).get("pack_version", "unknown")
+        library = SkillLibrary(self.memory, version)
+        context = {**context, "learned_strategies": library.context(text)}
         local = local_command(text)
         reply = local or await self.provider.converse(
             text, {**context, "conversation": conversation_context(self.memory)}
@@ -161,9 +170,26 @@ class ConversationManager:
             reply = reply.model_copy(
                 update={"intent": "conversation", "answer": "Уточни, какую цель или задачу нужно добавить."}
             )
+        if reply.recipe_correction is not None and (
+            reply.intent != "correct_fact"
+            or "исправь" not in text.casefold()
+            or not reply.replace_recipe_ids
+            or reply.recipe_correction.evidence_text not in text
+        ):
+            reply = reply.model_copy(update={"recipe_correction": None, "replace_recipe_ids": ()})
+        if reply.facts_patch and (
+            reply.intent not in {"report_resource", "correct_fact", "memorize"}
+            or not reply.directive_quote.strip()
+            or reply.directive_quote not in text
+            or SUGGESTION.search(text.strip())
+            or NEGATION.search(text)
+        ):
+            reply = reply.model_copy(update={"facts_patch": {}})
         for note in reply.notes:
             if note.kind != "assumption" and (not note.quote.strip() or note.quote not in text):
                 continue
+            if note.kind != "assumption":
+                library.note(note.key, note.quote, "player:" + channel)
             self.memory.remember(
                 "dialogue-notes",
                 note.key,

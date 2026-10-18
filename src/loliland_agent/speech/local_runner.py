@@ -12,16 +12,15 @@ from typing import Any
 
 def create_model(model: str, directory: str, download: bool) -> Any:
     from faster_whisper import WhisperModel
+    from huggingface_hub.errors import LocalEntryNotFoundError
 
-    return WhisperModel(
-        model,
-        device="cpu",
-        compute_type="int8",
-        cpu_threads=2,
-        num_workers=1,
-        download_root=directory,
-        local_files_only=not download,
-    )
+    options = dict(device="cpu", compute_type="int8", cpu_threads=2, num_workers=1, download_root=directory)
+    try:
+        return WhisperModel(model, local_files_only=True, **options)
+    except (FileNotFoundError, LocalEntryNotFoundError):
+        if not download:
+            raise
+        return WhisperModel(model, local_files_only=False, **options)
 
 
 def main() -> None:

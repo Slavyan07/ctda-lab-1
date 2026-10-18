@@ -6,6 +6,7 @@ import math
 from collections import Counter
 from typing import Literal
 
+from loliland_agent.learning.library import Procedure, SkillLibrary
 from loliland_agent.memory import Memory
 from loliland_agent.models import ItemAmount, Observation, Probability, RecipeCandidate, StrictModel
 
@@ -46,7 +47,56 @@ class RecipeKnowledgeBase:
         return tuple(
             Recipe.model_validate_json(json.dumps(row["value"]))
             for row in self.memory.list_knowledge(self.category)
+            if self.status(row["name"]) == "active"
         )
+
+    def _index(self, recipe: Recipe) -> None:
+        status = self.status(recipe.id)
+        SkillLibrary(self.memory, self.pack_version).put(
+            Procedure(
+                id="recipe:" + recipe.id,
+                title="Рецепт " + recipe.output.item,
+                topic=recipe.output.item,
+                kind="recipe",
+                explanation=json.dumps(recipe.model_dump(mode="json"), ensure_ascii=False),
+                source=recipe.evidence.kind + ":" + recipe.evidence.reference,
+                status="verified"
+                if status == "active" and recipe.evidence.kind == "screenshot"
+                else "user_report"
+                if status == "active"
+                else "superseded"
+                if status == "superseded"
+                else "disputed",
+                recipe_ids=(recipe.id,),
+            )
+        )
+
+    def status(self, identifier: str) -> str:
+        saved = self.memory.recall(self.category + ":status", identifier)
+        return str(saved["value"]["status"]) if saved else "active"
+
+    def correct(self, old_ids: tuple[str, ...], candidate: RecipeCandidate, evidence: Evidence) -> Recipe:
+        if evidence.kind != "user" or not old_ids:
+            raise ValueError("Исправление требует явного сообщения игрока и старого рецепта")
+        known = {row["name"]: row["value"] for row in self.memory.list_knowledge(self.category)}
+        if any(
+            identifier not in known or known[identifier]["output"]["item"] != candidate.output.item
+            for identifier in old_ids
+        ):
+            raise ValueError("Неизвестный или посторонний исправляемый рецепт")
+        recipe = self.add(candidate, evidence)
+        for identifier in old_ids:
+            if identifier != recipe.id:
+                self.memory.remember(
+                    self.category + ":status",
+                    identifier,
+                    {"status": "superseded", "replacement": recipe.id},
+                    evidence.reference,
+                )
+        self.memory.remember(self.category + ":status", recipe.id, {"status": "active"}, evidence.reference)
+        for row in self.memory.list_knowledge(self.category):
+            self._index(Recipe.model_validate_json(json.dumps(row["value"])))
+        return recipe
 
     def add(self, candidate: RecipeCandidate, evidence: Evidence) -> Recipe:
         if (
@@ -77,9 +127,28 @@ class RecipeKnowledgeBase:
             technologies=candidate.technologies,
             evidence=evidence,
         )
+        for old in self.all():
+            if (
+                old.id != digest
+                and old.output.item == recipe.output.item
+                and old.machine == recipe.machine
+                and {i.item for i in old.ingredients} == {i.item for i in recipe.ingredients}
+            ):
+                self._index(old.model_copy())
+                for identifier in (old.id, digest):
+                    self.memory.remember(
+                        self.category + ":status",
+                        identifier,
+                        {"status": "disputed"},
+                        "conflicting_recipe_evidence",
+                    )
         self.memory.remember(
             self.category, digest, recipe.model_dump(mode="json"), evidence.kind + ":" + evidence.reference
         )
+        self._index(recipe)
+        for row in self.memory.list_knowledge(self.category):
+            if self.status(row["name"]) != "active":
+                self._index(Recipe.model_validate_json(json.dumps(row["value"])))
         return recipe
 
     def ingest(self, observation: Observation) -> None:

@@ -45,7 +45,7 @@ from loliland_agent.models import Observation
 from loliland_agent.perception.recording import RecordingSource
 from loliland_agent.perception.sources import ImageSource, ObservationSource, ReplaySource, ScreenSource
 from loliland_agent.perception.windows import Win32
-from loliland_agent.speech.cloud_tts import CloudSpeech
+from loliland_agent.speech.cloud_tts import CloudSpeech, PiperSpeech
 from loliland_agent.speech.hotkeys import parse_hotkey
 from loliland_agent.speech.tts import RussianQtSpeech, SilentSpeech, SpeechBackend, SpeechController
 from loliland_agent.ui.voice_panel import VoicePanel
@@ -98,8 +98,8 @@ class MainWindow(QMainWindow):
         if speech_backend is None:
             try:
                 speech_backend = (
-                    CloudSpeech(settings)
-                    if settings.tts_provider == "cloud" and not demo
+                    (PiperSpeech(settings) if settings.tts_provider == "piper" else CloudSpeech(settings))
+                    if settings.tts_provider in {"cloud", "piper"} and not demo
                     else RussianQtSpeech()
                 )
             except Exception:
@@ -196,7 +196,7 @@ class MainWindow(QMainWindow):
         self.cancel_voice.clicked.connect(self.speech.cancel)
         self.compact = QCheckBox("Компактно поверх игры")
         self.compact.toggled.connect(self.toggle_compact)
-        self.api_button = QPushButton("Настройки API")
+        self.api_button = QPushButton("Локальные модели")
         self.api_button.clicked.connect(self.configure_api)
         for widget in (self.auto, self.voice, self.volume, self.cancel_voice, self.compact, self.api_button):
             options.addWidget(widget)
@@ -606,6 +606,9 @@ class MainWindow(QMainWindow):
                 "previous_goal",
                 "defer_task",
                 "prioritize",
+                "correct_fact",
+                "report_resource",
+                "memorize",
                 "check",
                 "done",
             }:
@@ -636,6 +639,9 @@ class MainWindow(QMainWindow):
 
     def interrupt_speech(self) -> None:
         self.speech.cancel()
+        self.auto.setChecked(False)
+        self.conversation.interrupt()
+        self.worker.request("yield_voice", replace=True)
         self.voice_panel.status.setText("Озвучка прервана; можно говорить")
 
     def bind_cloud_speech(self) -> None:
@@ -660,7 +666,11 @@ class MainWindow(QMainWindow):
             self._retired_speech.append(old)
         try:
             backend: SpeechBackend = (
-                CloudSpeech(settings) if settings.tts_provider == "cloud" else RussianQtSpeech()
+                PiperSpeech(settings)
+                if settings.tts_provider == "piper"
+                else CloudSpeech(settings)
+                if settings.tts_provider == "cloud"
+                else RussianQtSpeech()
             )
         except Exception:
             backend = SilentSpeech()
@@ -683,12 +693,12 @@ class MainWindow(QMainWindow):
         # Saving is an explicit UI choice; passwords never enter the settings JSON.
         from loliland_agent.speech.credentials import save_settings
 
-        if sys.platform == "win32":
+        if settings.free_mode or sys.platform == "win32":
             try:
                 save_settings(settings)
             except Exception:
                 self.voice_panel.status.setText(
-                    "Не удалось сохранить ключи в Windows Credential Manager; настройки действуют в текущем сеансе"
+                    "Не удалось сохранить настройки; они действуют в текущем сеансе"
                 )
 
     def services_finished(self) -> None:
@@ -777,13 +787,32 @@ class MainWindow(QMainWindow):
 
     def configure_api(self) -> None:
         dialog = QDialog(self)
-        dialog.setWindowTitle("API: изменения действуют в текущем сеансе")
+        dialog.setWindowTitle("Бесплатные локальные модели и бюджет памяти")
         layout = QVBoxLayout(dialog)
         form = QFormLayout()
         provider = QComboBox()
-        provider.addItems(["offline", "openai", "compatible", "ollama"])
+        provider.addItems(
+            ["ollama", "offline"]
+            if self.settings.free_mode
+            else ["offline", "openai", "compatible", "ollama"]
+        )
         provider.setCurrentText(self.settings.provider)
-        model = QLineEdit(self.settings.model)
+        model = QComboBox()
+        model.addItems(["qwen3-vl:4b", "qwen3-vl:2b"])
+        model.setCurrentText(self.settings.model)
+        budget_widgets = {}
+        for name, label, low, high in [
+            ("ollama_num_gpu", "Слои GPU (0 = CPU)", 0, 12),
+            ("ollama_num_ctx", "Контекст", 2048, 8192),
+            ("max_model_ram_mb", "Бюджет Ollama RAM, MB", 1024, 8192),
+            ("max_model_vram_mb", "Бюджет Ollama VRAM, MB", 0, 4096),
+            ("min_free_ram_mb", "Минимум свободной RAM, MB", 512, 8192),
+        ]:
+            control = QSpinBox()
+            control.setRange(low, high)
+            control.setValue(getattr(self.settings, name))
+            budget_widgets[name] = control
+            form.addRow(label, control)
         url = QLineEdit(self.settings.api_base_url)
         key = QLineEdit(self.settings.api_key.get_secret_value())
         key.setEchoMode(QLineEdit.EchoMode.Password)
@@ -799,11 +828,14 @@ class MainWindow(QMainWindow):
             ("Версия сборки", pack),
             ("Интервал наблюдения, сек", interval),
         ]:
+            if widget is key and self.settings.free_mode:
+                widget.hide()
+                continue
             form.addRow(label, widget)
         layout.addLayout(form)
         layout.addWidget(
             QLabel(
-                "Ключ не записывается на диск этой формой. Для постоянных настроек используйте .env вне Git. Новая версия сборки применяется при старте новой цели."
+                "API-ключи не нужны. Загрузка моделей: download_models.bat. Запуск Ollama с резервом VRAM: start_ollama.bat. Бюджеты проверяются до и во время запросов; это не жёсткие лимиты Windows."
             )
         )
         apply = QPushButton("Применить")
@@ -818,7 +850,8 @@ class MainWindow(QMainWindow):
                     **{
                         **self.settings.model_dump(),
                         "provider": provider.currentText(),
-                        "model": model.text(),
+                        "model": model.currentText(),
+                        **{name: control.value() for name, control in budget_widgets.items()},
                         "api_base_url": url.text(),
                         "api_key": SecretStr(key.text()),
                         "pack_version": pack.text(),
@@ -829,7 +862,7 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(
                     dialog,
                     "Неверные настройки",
-                    "Проверьте провайдера, HTTPS URL и наличие ключа; значения скрыты",
+                    "Проверьте модель и локальный адрес Ollama (127.0.0.1:11434/v1)",
                 )
                 return
             self.persist_api_settings(updated)

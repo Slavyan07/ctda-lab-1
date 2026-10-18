@@ -13,7 +13,13 @@ from loliland_agent.ui.app import MainWindow
 
 def window(qapp, tmp_path):
     value = MainWindow(
-        Settings(_env_file=None, database_path=tmp_path / "voice.db", interval_seconds=3),
+        Settings(
+            _env_file=None,
+            provider="offline",
+            tts_provider="system",
+            database_path=tmp_path / "voice.db",
+            interval_seconds=3,
+        ),
         demo=True,
         speech_backend=SilentSpeech(),
     )
@@ -80,7 +86,9 @@ def test_dialogue_works_while_screen_plan_waits_and_pause_cancels_it(qapp, tmp_p
     monkeypatch.setattr("loliland_agent.ui.worker.make_provider", lambda *args: SlowVisionPlanner())
     monkeypatch.setattr("loliland_agent.conversation.worker.make_provider", lambda *args: FastDialogue())
     view = MainWindow(
-        Settings(_env_file=None, database_path=tmp_path / "parallel.db"),
+        Settings(
+            _env_file=None, provider="offline", tts_provider="system", database_path=tmp_path / "parallel.db"
+        ),
         image=frame().image_path,
         speech_backend=SilentSpeech(),
     )
@@ -107,7 +115,7 @@ def test_switch_ptt_hands_free_and_microphone_error_leave_text_usable(qapp, tmp_
     try:
         panel = view.voice_panel
         panel.mode.setCurrentText("hands_free")
-        panel.stt.setCurrentText("cloud")
+        panel.stt.setCurrentText("local")
         # Avoid changing the test's silent backend; test settings signal is validated independently.
         values = []
         panel.settings_changed.disconnect(view.apply_voice_settings)

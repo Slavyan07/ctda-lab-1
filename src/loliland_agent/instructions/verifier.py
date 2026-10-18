@@ -36,7 +36,18 @@ class CompletionVerifier:
         confirmed = False
         if visual.confidence >= 0.95:
             if instruction.action == "open_inventory":
-                confirmed = visual.scene == "inventory"
+                confirmed = visual.scene == "inventory" and (
+                    instruction.item is None
+                    or instruction.count is None
+                    or sum(
+                        stack.count or 0
+                        for stack in visual.stacks
+                        if stack.item == instruction.item
+                        and stack.container == "inventory"
+                        and stack.confidence >= 0.95
+                    )
+                    >= instruction.count
+                )
             elif instruction.action == "open_storage":
                 confirmed = visual.scene == "storage"
             elif instruction.action == "open_machine":

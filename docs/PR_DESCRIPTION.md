@@ -1,17 +1,5 @@
-# Replace MNIST project with LoliLand AI Copilot
+# Free local LoliLand Copilot with Voyager-inspired planning
 
-Replace the selected repository with a standalone Windows 11 Copilot for LoliLand TechnoMagicRPG.
-A Russian goal now drives screenshot analysis, a dependency plan, one instruction, human action,
-and before/after verification. All gameplay remains human; the package contains no input executor,
-Minecraft bridge, mod integration, game process access or packet handling.
+Switch the default runtime to native Ollama Qwen3-VL, CPU faster-whisper and CPU Piper. Add a shared heavy-work queue, resource budgets, opt-in model downloads, SQLite human skill search, adaptive recipe curriculum, revision-aware corrections and persistent failure reflection. Preserve human gameplay, voice UI, screenshots and saved progress.
 
-Includes PySide6 desktop UI, OpenAI/OpenAI-compatible vision providers, persisted goal queue,
-recipe provenance and pack versioning, material calculation, partial inventory/storage tracking,
-SQLite history, Russian system TTS, notification hotkeys, capture/replay, Windows installers and setup docs.
-Uncertain results remain pending or receive explicit manual confirmation. Pause/goal changes cancel
-in-flight requests and discard stale model responses.
-
-Validation: 94 passing tests, strict mypy, ruff, dependency checks, sdist/wheel build,
-installed-wheel Qt human cycle and headless replay. Tests use saved synthetic screenshots and mocked
-API/capture/human actions. Actual LoliLand, Windows screen/audio devices and a live vision API were
-not exercised here; manual acceptance steps are documented in docs/acceptance.md.
+No game automation, modifications, paid fallback or automatic GitHub publication. Source ZIP includes Windows install/start/check/model scripts; weights are downloaded separately. See docs/validation.md for executed tests and untested real Windows/model quality.

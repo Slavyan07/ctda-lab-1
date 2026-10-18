@@ -130,7 +130,45 @@ class CopilotWorker(QThread):
             if data.get("expected_goal") != (goal.id if goal else None):
                 raise ValueError("Цель изменилась во время разговора; повторите команду")
             intent = reply.intent
-            if intent == "pause":
+            if intent == "correct_fact" and reply.recipe_correction is not None:
+                from loliland_agent.recipes.planner import Evidence
+
+                service.knowledge.correct(
+                    reply.replace_recipe_ids,
+                    reply.recipe_correction,
+                    Evidence(
+                        kind="user",
+                        reference=reply.directive_quote,
+                        excerpt=reply.recipe_correction.evidence_text,
+                        confidence=1.0,
+                    ),
+                )
+                service.reset_failed_attempts("explicit_voice_recipe_correction")
+                if goal:
+                    service.goals.replace(goal.model_copy(update={"pending": None}))
+                if service.source is not None:
+                    await service.replan(command.revision)
+            elif reply.facts_patch and intent in {"report_resource", "correct_fact", "memorize"}:
+                patch = dict(reply.facts_patch)
+                if intent == "report_resource":
+                    for name in ("raw_resources", "machines", "technologies"):
+                        if name in patch and isinstance(patch[name], list):
+                            patch[name] = list(
+                                dict.fromkeys([*service.resources.facts().get(name, []), *patch[name]])
+                            )
+                service.resources.set_facts(patch)
+                service.reset_failed_attempts("explicit_voice_player_report")
+                if goal:
+                    service.goals.replace(goal.model_copy(update={"pending": None}))
+                if service.source is not None:
+                    await service.replan(command.revision)
+            elif intent == "report_resource":
+                service.resources.invalidate()
+                if goal:
+                    service.goals.replace(goal.model_copy(update={"pending": None}))
+                if service.source is not None:
+                    await service.replan(command.revision)
+            elif intent == "pause":
                 service.goals.pause()
             elif intent == "add_task":
                 service.goals.add_task(reply.task, reply.priority)
@@ -161,6 +199,9 @@ class CopilotWorker(QThread):
                 service.snapshot()
                 current = service.goals.current
                 assert current is not None
+                if service.reflection.blocked(current.id):
+                    service.goals.pause()
+                    raise ValueError("Повторные ошибки: исправьте рецепт, факты или план перед продолжением")
                 if current.pending:
                     service.publish(
                         "instruction",
@@ -188,6 +229,8 @@ class CopilotWorker(QThread):
             ):
                 await service._next(service.last_observation, command.revision)
             service.publish("dialogue_applied", {"intent": intent, "text": "Команда диалога обработана"})
+            service.snapshot()
+        elif kind == "yield_voice":
             service.snapshot()
         elif kind == "start":
             await service.start(data["goal"], data["priority"], command.revision)

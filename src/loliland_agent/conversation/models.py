@@ -1,8 +1,8 @@
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import Field
 
-from loliland_agent.models import StrictModel, Usage
+from loliland_agent.models import RecipeCandidate, StrictModel, Usage
 
 Intent = Literal[
     "conversation",
@@ -43,6 +43,9 @@ class DialogueReply(StrictModel):
     task: Annotated[str, Field(max_length=800)] = ""
     priority: Annotated[int, Field(ge=0, le=100)] = 50
     notes: Annotated[tuple[DialogueNote, ...], Field(max_length=10)] = ()
+    facts_patch: dict[str, Any] = {}
+    recipe_correction: RecipeCandidate | None = None
+    replace_recipe_ids: tuple[str, ...] = ()
     usage: Usage = Field(default_factory=Usage)
 
 

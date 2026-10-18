@@ -11,7 +11,7 @@ if not errorlevel 1 goto python_ok
 echo Нужен Python 3.11 x64 с python.org. При установке включите Python Launcher и Add to PATH.
 goto failed
 :python_ok
-echo Устанавливаю LoliLand AI Copilot. Нужен Интернет для зависимостей; модели Whisper не скачиваются.
+echo Устанавливаю LoliLand AI Copilot. Нужен Интернет для зависимостей; веса моделей не скачиваются.
 %COPILOT_PY% -m venv .venv
 if errorlevel 1 goto failed
 ".venv\Scripts\python.exe" -m pip install --disable-pip-version-check --require-hashes -r requirements-lock.txt
@@ -21,8 +21,8 @@ if errorlevel 1 goto failed
 ".venv\Scripts\python.exe" -m pip check
 if errorlevel 1 goto failed
 if not exist ".env" copy ".env.example" ".env" >nul
-echo Установка завершена. Запустите start.bat. Без ключа доступны DEMO и локальные команды.
-echo Для облачного ИИ откройте Настройки API; ключ сохраняется в Windows Credential Manager.
+echo Установка завершена. Запустите start.bat. Ключи не нужны: Ollama + Whisper + Piper работают локально.
+echo Установите Ollama с ollama.com. Затем start_ollama.bat, download_models.bat и start.bat.
 if /i not "%~1"=="--ci" pause
 exit /b 0
 :failed

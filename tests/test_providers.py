@@ -28,6 +28,7 @@ def config(**updates):
     return Settings(
         _env_file=None,
         provider="compatible",
+        free_mode=False,
         api_base_url="https://vision.example/v1",
         api_key=SecretStr("not-a-real-key"),
         input_price_per_million=1.0,
@@ -131,9 +132,10 @@ def test_invalid_settings(updates):
         Settings(_env_file=None, **updates)
 
 
-def test_offline_default_and_separate_openai_interface():
+def test_free_local_default_and_separate_legacy_interface():
     settings = Settings(_env_file=None)
-    assert settings.provider == "offline"
+    assert settings.provider == "ollama" and settings.free_mode
+    assert settings.api_key.get_secret_value() == ""
     with httpx.Client():
         pass
     assert "not-a-real-key" not in repr(config())

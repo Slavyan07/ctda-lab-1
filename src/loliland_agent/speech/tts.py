@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Protocol
 
 
@@ -29,9 +30,25 @@ class RussianQtSpeech:
             if voices
             else "Русский голос TTS не найден. Установите русский пакет речи Windows; текстовый режим работает."
         )
+        self.voices = voices
         if voices:
             self.engine.setVoice(voices[0])
         self.engine.errorOccurred.connect(self._error)
+
+    @property
+    def playing(self) -> bool:
+        return self.engine.state().name == "Speaking"
+
+    def voice_names(self) -> list[str]:
+        return [voice.name() for voice in self.voices]
+
+    def select_voice(self, name: str) -> None:
+        voice = next((item for item in self.voices if item.name() == name), None)
+        if voice is not None:
+            self.engine.setVoice(voice)
+
+    def rate(self, factor: float) -> None:
+        self.engine.setRate(math.log2(factor))
 
     def _error(self, *args: object) -> None:
         self.available = False
@@ -68,6 +85,17 @@ class SpeechController:
             raise ValueError("Громкость: 0–100")
         self._volume = value
         self.backend.volume(value / 100)
+
+    @property
+    def speaking(self) -> bool:
+        return bool(getattr(self.backend, "playing", False))
+
+    def set_rate(self, factor: float) -> None:
+        if not 0.5 <= factor <= 2:
+            raise ValueError("Скорость: 0.5–2")
+        setter = getattr(self.backend, "rate", None)
+        if setter:
+            setter(factor)
 
     def instruction(self, text: str) -> None:
         self.last = text

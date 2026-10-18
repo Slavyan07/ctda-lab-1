@@ -97,21 +97,38 @@ class GoalManager:
             )
         )
 
+    def protected_steps(self) -> tuple[PlanStep, ...]:
+        goal = self.current
+        if goal is None:
+            return ()
+        ids = {step.id for step in goal.steps if step.status in {"done", "paused"}}
+        by_id = {step.id: step for step in goal.steps}
+        pending = list(ids)
+        while pending:
+            for dependency in by_id[pending.pop()].depends_on:
+                if dependency not in ids:
+                    ids.add(dependency)
+                    pending.append(dependency)
+        return tuple(step for step in goal.steps if step.id in ids)
+
     def set_plan(self, proposal: PlanProposal) -> None:
         goal = self.current
         if goal is None:
             raise ValueError("Нет главной цели")
         if any(step.status != "pending" for step in proposal.steps):
             raise ValueError("Модель не может объявлять задачи уже выполненными")
-        completed = tuple(step for step in goal.steps if step.status == "done")
+        protected = self.protected_steps()
+        completed = tuple(step for step in protected if step.status == "done")
         completed_ids = {step.id for step in completed}
-        if any(step.id in completed_ids for step in proposal.steps):
+        if any(step.id in {old.id for old in protected} for step in proposal.steps):
             raise ValueError("Новый план не должен переписывать подтверждённые шаги")
-        combined = (*completed, *proposal.steps)
+        combined = (*protected, *proposal.steps)
         self.validate_steps(combined)
         task_id = proposal.instruction.task_id
         if task_id is not None and not any(
-            step.id == task_id and step.status == "pending" and set(step.depends_on) <= completed_ids
+            step.id == task_id
+            and step.status in {"pending", "active"}
+            and set(step.depends_on) <= completed_ids
             for step in combined
         ):
             raise ValueError("Первая инструкция нового плана должна относиться к доступной задаче")
@@ -191,6 +208,32 @@ class GoalManager:
         self.replace(
             goal.model_copy(update={"pending": None, "steps": steps, "skipped_count": goal.skipped_count + 1})
         )
+
+    def add_task(self, title: str, priority: int = 50) -> PlanStep:
+        goal = self.current
+        if goal is None:
+            raise ValueError("Сначала задайте главную цель")
+        task = PlanStep(
+            id="user-" + str(uuid4()),
+            title=title,
+            acceptance="Проверяемый результат задачи; уточняется по изображению",
+            priority=priority,
+        )
+        self.replace(goal.model_copy(update={"steps": (*goal.steps, task)}))
+        return task
+
+    def defer(self) -> None:
+        goal = self.current
+        if goal is None or goal.pending is None:
+            raise ValueError("Нет текущей инструкции")
+        task_id = goal.pending.instruction.task_id
+        steps = tuple(
+            step.model_copy(update={"status": "paused"}) if step.id == task_id else step
+            for step in goal.steps
+        )
+        self.replace(goal.model_copy(update={"steps": steps, "pending": None}))
+        if not self.ready():
+            self.pause()
 
     def prioritize(self, priority: int) -> None:
         if self.current is None or not 0 <= priority <= 100:

@@ -33,3 +33,16 @@ Completion Verifier и системный русский TTS. Тест архи�
 Существующую v0.2 SQLite можно сохранить: общие таблицы совместимы; новый workspace хранится
 в отдельном namespace. Неподтверждённые старые действия/общие записи recipe не превращаются
 автоматически в подтверждённые знания Copilot. JSON pending и новые рецепты имеют проверяемые схемы.
+
+## Переход 0.3 → 0.4
+
+Сохранены ScreenSource/ReplaySource, vision-провайдеры, Goal Manager, Recipe KB, Resource Tracker,
+Instruction Engine, SQLite/WAL и PySide6. Добавлены Speech-to-Text, PCM/VAD/PTT, отдельные speech/
+conversation очереди, Conversation Manager и персистентные диалоги/сводки/заметки. Системный русский
+TTS расширен голосами/скоростью, облачный WAV TTS — выбором выхода и отменой старых запросов.
+Whisper вынесен в ограниченный CPU subprocess, model download требует явного разрешения.
+Автоматического игрового ввода по-прежнему нет.
+
+Доставка заменена сборкой ZIP, не зависящей от Git. Обновлены install/start/check, добавлен optional
+install_local_stt.bat, русская инструкция, diagnostics и проверяемый manifest архива.
+Ключи GUI сохраняются через Windows Credential Manager, данные исключаются сборщиком из ZIP.

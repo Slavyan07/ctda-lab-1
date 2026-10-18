@@ -30,7 +30,9 @@ class Memory:
         CREATE TABLE IF NOT EXISTS usage (
           id INTEGER PRIMARY KEY, at REAL NOT NULL, input_tokens INTEGER NOT NULL,
           output_tokens INTEGER NOT NULL, cost_usd REAL);
-        PRAGMA user_version=1;
+        CREATE TABLE IF NOT EXISTS conversation_messages (
+          id INTEGER PRIMARY KEY, at REAL NOT NULL, role TEXT NOT NULL, channel TEXT NOT NULL, text TEXT NOT NULL);
+        PRAGMA user_version=2;
         """)
         # Legacy goal rows remain paused after an interrupted session.
         with self._db:
@@ -132,6 +134,30 @@ class Memory:
                 "output_tokens": row[2],
                 "cost_usd": row[3] if row[0] == row[4] else None,
             }
+
+    def message(self, role: str, channel: str, text: str) -> int:
+        if (
+            role not in {"user", "assistant"}
+            or channel not in {"voice", "text"}
+            or not text.strip()
+            or len(text) > 8000
+        ):
+            raise ValueError("Неверное сообщение диалога")
+        with self._lock, self._db:
+            cursor = self._db.execute(
+                "INSERT INTO conversation_messages(at,role,channel,text) VALUES (?,?,?,?)",
+                (time.time(), role, channel, text),
+            )
+            assert cursor.lastrowid is not None
+            return cursor.lastrowid
+
+    def messages(self, limit: int = 12, *, after: int = 0, oldest: bool = False) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._db.execute(
+                f"SELECT * FROM conversation_messages WHERE id>? ORDER BY id {'ASC' if oldest else 'DESC'} LIMIT ?",
+                (after, max(1, min(limit, 200))),
+            ).fetchall()
+            return [dict(row) for row in (rows if oldest else reversed(rows))]
 
     def close(self) -> None:
         with self._lock:

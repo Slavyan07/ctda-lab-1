@@ -1,3 +1,3 @@
-"""Visual advice for human gameplay. No game input or client modification."""
+"""Human gameplay, visual planning and Russian voice companionship."""
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"

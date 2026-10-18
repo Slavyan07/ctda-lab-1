@@ -6,6 +6,7 @@ import json
 import re
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +27,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
+    QScrollArea,
     QSlider,
     QSpinBox,
     QTabWidget,
@@ -36,12 +38,17 @@ from PySide6.QtWidgets import (
 )
 
 from loliland_agent.config import Settings
+from loliland_agent.conversation.models import DialogueReply
+from loliland_agent.conversation.worker import ConversationWorker
 from loliland_agent.memory import Memory
 from loliland_agent.models import Observation
 from loliland_agent.perception.recording import RecordingSource
 from loliland_agent.perception.sources import ImageSource, ObservationSource, ReplaySource, ScreenSource
 from loliland_agent.perception.windows import Win32
+from loliland_agent.speech.cloud_tts import CloudSpeech
+from loliland_agent.speech.hotkeys import parse_hotkey
 from loliland_agent.speech.tts import RussianQtSpeech, SilentSpeech, SpeechBackend, SpeechController
+from loliland_agent.ui.voice_panel import VoicePanel
 from loliland_agent.ui.worker import CopilotWorker
 
 
@@ -90,11 +97,20 @@ class MainWindow(QMainWindow):
         self.api = Win32() if sys.platform == "win32" and not (image or replay or demo) else None
         if speech_backend is None:
             try:
-                speech_backend = RussianQtSpeech()
+                speech_backend = (
+                    CloudSpeech(settings)
+                    if settings.tts_provider == "cloud" and not demo
+                    else RussianQtSpeech()
+                )
             except Exception:
                 speech_backend = SilentSpeech()
+        self._retired_speech: list[CloudSpeech] = []
         self.speech = SpeechController(speech_backend)
         self.speech.set_volume(settings.speech_volume)
+        self.speech.set_rate(settings.speech_rate)
+        select_voice = getattr(speech_backend, "select_voice", None)
+        if select_voice:
+            select_voice(settings.tts_voice)
         self.setWindowTitle("LoliLand AI Copilot — действия выполняет человек")
         self.resize(1180, 850)
         root = QWidget()
@@ -224,9 +240,7 @@ class MainWindow(QMainWindow):
         self.replan_button = QPushButton("Перепланировать")
         self.edit_plan_button = QPushButton("Изменить план")
         self.complete_button = QPushButton("Главная цель достигнута")
-        self.replan_button.clicked.connect(
-            lambda: self.worker.request("replan", replace=True, delay=self.capture_delay())
-        )
+        self.replan_button.clicked.connect(self.request_replan)
         self.edit_plan_button.clicked.connect(self.edit_plan)
         self.complete_button.clicked.connect(self.complete_goal)
         for widget in (self.replan_button, self.edit_plan_button, self.complete_button):
@@ -303,19 +317,48 @@ class MainWindow(QMainWindow):
         self.auto_timer.setInterval(int(settings.interval_seconds * 1000))
         self.auto_timer.timeout.connect(self.auto_check)
         self.auto_timer.start()
+        self.conversation = ConversationWorker(settings, self.memory)
+        self.conversation.setParent(self)
+        self.conversation.updated.connect(self.on_dialogue)
+        self.conversation.finished.connect(self.services_finished)
+        self.voice_panel = VoicePanel(settings, self.speech)
+        self.voice_panel.transcript.connect(lambda text: self.submit_dialogue(text, "voice"))
+        self.voice_panel.interrupt_requested.connect(self.interrupt_speech)
+        self.voice_panel.repeat_requested.connect(self.repeat)
+        self.voice_panel.settings_changed.connect(self.apply_voice_settings)
+        self.voice_panel.service_finished.connect(self.services_finished)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(self.voice_panel)
+        self.tabs.insertTab(0, scroll, "Голосовой напарник")
+        self.tabs.setCurrentIndex(0)
+        for row in self.memory.messages(100):
+            line = ("Вы: " if row["role"] == "user" else "ИИ: ") + row["text"]
+            self.chat_view.appendPlainText(line)
+            self.voice_panel.history.appendPlainText(line)
+        self.bind_cloud_speech()
+        self.conversation.start()
         self.worker.start()
         if settings.speech_enabled:
             self.voice.setChecked(True)
-        if self.api:
+        hotkey_api = self.api or (Win32() if sys.platform == "win32" else None)
+        if hotkey_api:
 
             def watch() -> None:
-                assert self.api is not None
+                assert hotkey_api is not None
+                ptt_was = False
                 previous = {"pause": False, "check": False, "repeat": False}
                 while not self._hotkey_stop.wait(0.04):
+                    ptt_now = all(
+                        hotkey_api.key_pressed(key) for key in parse_hotkey(self.settings.ptt_hotkey)
+                    )
+                    if ptt_now != ptt_was:
+                        self.hotkey.emit("ptt_down" if ptt_now else "ptt_up")
+                    ptt_was = ptt_now
                     hwnd = self._selected_hwnd
                     for kind, key in [("pause", 0x77), ("check", 0x78), ("repeat", 0x79)]:
-                        pressed = self.api.key_pressed(key)
-                        if pressed and not previous[kind] and hwnd is not None and self.api.focused(hwnd):
+                        pressed = hotkey_api.key_pressed(key)
+                        if pressed and not previous[kind] and hwnd is not None and hotkey_api.focused(hwnd):
                             self.hotkey.emit(kind)
                         previous[kind] = pressed
 
@@ -389,6 +432,7 @@ class MainWindow(QMainWindow):
         if not self.goal_input.text().strip():
             return
         self.speech.cancel()
+        self.conversation.interrupt()
         self.worker.request(
             "start",
             {"goal": self.goal_input.text(), "priority": self.priority.value()},
@@ -399,6 +443,8 @@ class MainWindow(QMainWindow):
     def select_goal(self, index: int) -> None:
         identifier = self.goal_queue.itemData(index)
         if identifier:
+            self.speech.cancel()
+            self.conversation.interrupt()
             self.worker.request("select", identifier, replace=True)
 
     def request_check(self, manual: bool, hotkey: bool = False) -> None:
@@ -443,6 +489,7 @@ class MainWindow(QMainWindow):
             self.worker.request("skip", pending["id"], replace=True)
 
     def pause(self) -> None:
+        self.conversation.interrupt()
         self.auto.setChecked(False)
         self.speech.cancel()
         self.worker.request("pause", replace=True)
@@ -496,6 +543,9 @@ class MainWindow(QMainWindow):
             self.worker.request("auto")
 
     def on_hotkey(self, kind: str) -> None:
+        if kind in {"ptt_down", "ptt_up"}:
+            self.voice_panel.hold(kind == "ptt_down")
+            return
         if kind == "pause":
             self.pause()
         elif kind == "repeat":
@@ -503,11 +553,147 @@ class MainWindow(QMainWindow):
         elif kind == "check" and not self._busy:
             self.request_check(False, True)
 
+    def request_replan(self) -> None:
+        self.speech.cancel()
+        self.conversation.interrupt()
+        self.worker.request("replan", replace=True, delay=self.capture_delay())
+
     def send_chat(self) -> None:
         text = self.chat_input.text().strip()
         if text:
-            self.worker.request("chat", text)
+            self.submit_dialogue(text, "text")
             self.chat_input.clear()
+
+    def submit_dialogue(self, text: str, channel: str) -> None:
+        if self._closing:
+            return
+        context = {
+            **self._state.get("context", {}),
+            "goal": self._state.get("goal"),
+            "visual": (self._state.get("observation") or {}).get("visual"),
+            "plan_revision": self.worker.guard.current(),
+            "observation_age_seconds": max(0, time.time() - self._state["observation"]["captured_at"])
+            if self._state.get("observation")
+            else None,
+        }
+        self.chat_view.appendPlainText("Вы: " + text)
+        self.voice_panel.history.appendPlainText("Вы: " + text)
+        self.conversation.submit(text, channel, context)
+
+    def on_dialogue(self, event: dict[str, Any]) -> None:
+        if self._closing:
+            return
+        kind = event["kind"]
+        if kind == "thinking":
+            self.voice_panel.thinking.setText("ИИ думает" if event["value"] else "ИИ ожидает сообщения")
+        elif kind == "error":
+            self.voice_panel.status.setText(event["text"])
+        elif kind == "reply":
+            if event.get("epoch") != self.conversation.epoch:
+                return
+            reply = DialogueReply.model_validate_json(json.dumps(event["reply"]))
+            self.chat_view.appendPlainText("ИИ: " + reply.answer)
+            self.voice_panel.history.appendPlainText("ИИ: " + reply.answer)
+            if reply.intent == "repeat":
+                self.repeat()
+                return
+            if reply.intent in {
+                "change_goal",
+                "add_task",
+                "replan",
+                "pause",
+                "resume",
+                "previous_goal",
+                "defer_task",
+                "prioritize",
+                "check",
+                "done",
+            }:
+                context = event["context"]
+                if context.get("plan_revision") != self.worker.guard.current():
+                    self.voice_panel.status.setText("План изменился во время разговора; повторите команду")
+                    return
+                self.speech.cancel()
+                goal = context.get("goal") or {}
+                if reply.intent == "pause":
+                    self.auto.setChecked(False)
+                self.worker.request(
+                    "dialogue_action",
+                    {
+                        "reply": reply.model_dump_json(),
+                        "expected_goal": goal.get("id"),
+                        "expected_pending": (goal.get("pending") or {}).get("id"),
+                    },
+                    replace=True,
+                    delay=self.capture_delay()
+                    if reply.intent in {"check", "done", "replan", "change_goal", "resume", "previous_goal"}
+                    else 0,
+                )
+            try:
+                self.speech.instruction(reply.answer)
+            except RuntimeError:
+                self.voice.setChecked(False)
+
+    def interrupt_speech(self) -> None:
+        self.speech.cancel()
+        self.voice_panel.status.setText("Озвучка прервана; можно говорить")
+
+    def bind_cloud_speech(self) -> None:
+        backend = self.speech.backend
+        if isinstance(backend, CloudSpeech):
+            backend.worker.finished.connect(self.services_finished)
+            backend.error.connect(self.voice_panel.status.setText)
+            from PySide6.QtMultimedia import QMediaDevices
+
+            for device in QMediaDevices.audioOutputs():
+                if bytes(device.id().toHex().data()).decode("ascii") == self.settings.audio_output_device:
+                    backend.set_device(device)
+
+    def apply_voice_settings(self, settings: Settings) -> None:
+        settings = settings.model_copy(
+            update={"speech_enabled": self.voice.isChecked(), "speech_volume": self.volume.value()}
+        )
+        self.speech.cancel()
+        old = self.speech.backend
+        if isinstance(old, CloudSpeech):
+            old.close()
+            self._retired_speech.append(old)
+        try:
+            backend: SpeechBackend = (
+                CloudSpeech(settings) if settings.tts_provider == "cloud" else RussianQtSpeech()
+            )
+        except Exception:
+            backend = SilentSpeech()
+        self.speech.backend = backend
+        self.speech.set_volume(self.volume.value())
+        self.speech.set_rate(settings.speech_rate)
+        choose = getattr(backend, "select_voice", None)
+        if choose:
+            choose(settings.tts_voice)
+        self.settings = settings
+        self.persist_api_settings(settings)
+        self.voice_panel.settings = settings
+        self.voice_panel.update_voices()
+        self.bind_cloud_speech()
+        self.conversation.configure(settings)
+        self.worker.request("configure", settings, replace=True)
+        self.speech.enable(self.voice.isChecked())
+
+    def persist_api_settings(self, settings: Settings) -> None:
+        # Saving is an explicit UI choice; passwords never enter the settings JSON.
+        from loliland_agent.speech.credentials import save_settings
+
+        if sys.platform == "win32":
+            try:
+                save_settings(settings)
+            except Exception:
+                self.voice_panel.status.setText(
+                    "Не удалось сохранить ключи в Windows Credential Manager; настройки действуют в текущем сеансе"
+                )
+
+    def services_finished(self) -> None:
+        if self._closing:
+            self.close()
 
     def complete_goal(self) -> None:
         if (
@@ -532,6 +718,9 @@ class MainWindow(QMainWindow):
         layout.addWidget(save)
 
         def accept() -> None:
+            if operation == "plan_edit":
+                self.speech.cancel()
+                self.conversation.interrupt()
             self.worker.request(operation, text.toPlainText(), replace=True)
             dialog.accept()
 
@@ -643,7 +832,10 @@ class MainWindow(QMainWindow):
                     "Проверьте провайдера, HTTPS URL и наличие ключа; значения скрыты",
                 )
                 return
+            self.persist_api_settings(updated)
             self.settings = updated
+            self.conversation.configure(updated)
+            self.voice_panel.settings = updated
             self.worker.request("configure", updated, replace=True)
             self.auto_timer.setInterval(int(updated.interval_seconds * 1000))
             dialog.accept()
@@ -662,13 +854,14 @@ class MainWindow(QMainWindow):
                 self.status.setText("Анализ: " + event["operation"])
             elif self.status.text().startswith("Анализ: "):
                 self.status.setText("Ожидаю действия человека")
-            for widget in (self.check_button, self.done_button, self.skip_button, self.chat_send):
+            for widget in (self.check_button, self.done_button, self.skip_button):
                 widget.setEnabled(not self._busy)
             return
         if kind == "snapshot":
             self.render_snapshot(event)
             return
         if kind == "observation":
+            self._state["observation"] = event
             self.render_observation(event)
         elif kind == "instruction":
             self.next_action.setText(event["text"])
@@ -738,7 +931,8 @@ class MainWindow(QMainWindow):
                 self.reason.setText(
                     instruction["reason"] + ("\n" + pending["evidence"] if pending["evidence"] else "")
                 )
-                self.speech.last = instruction["text"]
+                if not self.speech.last:
+                    self.speech.last = instruction["text"]
                 task_id = pending["instruction"]["task_id"]
                 self.task.setText(
                     "Текущая задача: "
@@ -746,6 +940,14 @@ class MainWindow(QMainWindow):
                         (step["title"] for step in goal["steps"] if step["id"] == task_id), "Сбор информации"
                     )
                 )
+            else:
+                self.next_action.setText(
+                    "Главная цель отмечена достигнутой."
+                    if goal["status"] == "completed"
+                    else "Ожидаю следующую инструкцию."
+                )
+                self.task.setText("Текущая задача: —")
+                self.reason.clear()
         if event.get("observation"):
             self.render_observation(event["observation"])
         context = event["context"]
@@ -757,6 +959,7 @@ class MainWindow(QMainWindow):
                     "known_resources": context["observed_resources"],
                     "recipes": context["recipes"],
                     "facts": context["confirmed_facts"],
+                    "dialogue_reports": context.get("conversation", {}).get("notes", []),
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -765,7 +968,7 @@ class MainWindow(QMainWindow):
         usage = event["usage"]
         cost = "неизвестна" if usage["cost_usd"] is None else f"${usage['cost_usd']:.6f}"
         self.usage_label.setText(
-            f"API: {usage['calls']} · токены {usage['input_tokens']} / {usage['output_tokens']} · стоимость {cost}"
+            f"LLM: {usage['calls']} · токены {usage['input_tokens']} / {usage['output_tokens']} · стоимость {cost}"
         )
         if not self.journal.toPlainText():
             for row in reversed(context["history"]):
@@ -785,11 +988,25 @@ class MainWindow(QMainWindow):
         self._hotkey_stop.set()
         if self._hotkey_thread:
             self._hotkey_thread.join(timeout=0.5)
+        self.voice_panel.shutdown()
+        self.conversation.stop()
+        if isinstance(self.speech.backend, CloudSpeech):
+            self.speech.backend.close()
         self.worker.stop()
-        if self.worker.isRunning():
+        speech_backends = [
+            *self._retired_speech,
+            *([self.speech.backend] if isinstance(self.speech.backend, CloudSpeech) else []),
+        ]
+        if (
+            self.worker.isRunning()
+            or self.conversation.isRunning()
+            or self.voice_panel.running()
+            or any(backend.worker.isRunning() for backend in speech_backends)
+        ):
             event.ignore()
             return
         self.worker.wait()
+        self.conversation.wait()
         self.worker.updated.disconnect(self.on_event)
         self.worker.finished.disconnect(self.worker_finished)
         self.memory.close()

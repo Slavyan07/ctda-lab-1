@@ -12,6 +12,7 @@ import httpx
 from PySide6.QtCore import QThread, Signal
 
 from loliland_agent.config import Settings
+from loliland_agent.conversation.models import DialogueReply
 from loliland_agent.instructions.engine import Copilot, RequestGuard, Superseded
 from loliland_agent.memory import Memory
 from loliland_agent.perception.sources import ObservationSource
@@ -123,7 +124,72 @@ class CopilotWorker(QThread):
             await asyncio.sleep(command.delay)
         self.guard.check(command.revision)
         kind, data = command.kind, command.data
-        if kind == "start":
+        if kind == "dialogue_action":
+            reply = DialogueReply.model_validate_json(data["reply"])
+            goal = service.goals.current
+            if data.get("expected_goal") != (goal.id if goal else None):
+                raise ValueError("Цель изменилась во время разговора; повторите команду")
+            intent = reply.intent
+            if intent == "pause":
+                service.goals.pause()
+            elif intent == "add_task":
+                service.goals.add_task(reply.task, reply.priority)
+            elif intent == "prioritize":
+                service.goals.prioritize(reply.priority)
+            elif intent == "defer_task":
+                if data.get("expected_pending") != (goal.pending.id if goal and goal.pending else None):
+                    raise ValueError("Текущая инструкция изменилась")
+                service.goals.defer()
+            elif intent in {"change_goal", "resume", "previous_goal"}:
+                if intent == "change_goal":
+                    service.goals.start(reply.goal, service.settings.pack_version, reply.priority)
+                else:
+                    if intent == "previous_goal":
+                        others = [
+                            candidate
+                            for candidate in service.goals.workspace.goals
+                            if candidate.id != (goal.id if goal else None) and candidate.status != "completed"
+                        ]
+                        if not others:
+                            raise ValueError("Предыдущей цели нет")
+                        service.goals.pause()
+                        goal = others[-1]
+                        service.goals.select(goal.id)
+                    if goal is None:
+                        raise ValueError("Нет цели для продолжения")
+                    service.goals.start(goal.description, goal.pack_version, goal.priority)
+                service.snapshot()
+                current = service.goals.current
+                assert current is not None
+                if current.pending:
+                    service.publish(
+                        "instruction",
+                        {
+                            "id": current.pending.id,
+                            "text": (current.pending.clarification or current.pending.instruction).text,
+                            "restored": True,
+                        },
+                    )
+                elif service.source is not None:
+                    observation = await service._capture(command.revision)
+                    if observation is not None:
+                        await service._next(observation, command.revision)
+            elif intent == "replan":
+                await service.replan(command.revision)
+            elif intent in {"check", "done"}:
+                await service.check(command.revision, manual_requested=intent == "done")
+            if (
+                intent in {"defer_task", "add_task"}
+                and service.goals.current
+                and service.goals.current.status == "active"
+                and service.goals.current.pending is None
+                and service.last_observation is not None
+                and service.goals.ready()
+            ):
+                await service._next(service.last_observation, command.revision)
+            service.publish("dialogue_applied", {"intent": intent, "text": "Команда диалога обработана"})
+            service.snapshot()
+        elif kind == "start":
             await service.start(data["goal"], data["priority"], command.revision)
         elif kind in {"check", "auto", "done"}:
             await service.check(command.revision, manual_requested=kind == "done", auto=kind == "auto")

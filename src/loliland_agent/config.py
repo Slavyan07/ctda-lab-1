@@ -22,6 +22,22 @@ class Settings(BaseSettings):
     pack_version: str = Field(default="unspecified", min_length=1, max_length=250)
     speech_enabled: bool = False
     speech_volume: int = Field(default=80, ge=0, le=100)
+    speech_rate: float = Field(default=1.0, ge=0.5, le=2)
+    tts_provider: Literal["system", "cloud"] = "system"
+    tts_voice: str = "coral"
+    tts_model: str = "gpt-4o-mini-tts"
+    speech_api_base_url: str = "https://api.openai.com/v1"
+    speech_api_key: SecretStr = SecretStr("")
+    stt_provider: Literal["disabled", "cloud", "local"] = "disabled"
+    stt_model: str = "gpt-4o-mini-transcribe"
+    whisper_model: Literal["tiny", "base"] = "tiny"
+    allow_model_download: bool = False
+    voice_mode: Literal["ptt", "hands_free"] = "ptt"
+    ptt_hotkey: str = "CTRL+ALT+F6"
+    vad_threshold: float = Field(default=0.015, ge=0.001, le=0.3)
+    vad_silence: float = Field(default=0.7, ge=0.3, le=2)
+    microphone_device: int | None = None
+    audio_output_device: str = ""
     database_path: Path = Path("data/copilot.sqlite3")
     window_title_pattern: str = r"(?i)minecraft|loliland|LoliLand Agent Test"
     input_price_per_million: float | None = Field(default=None, ge=0)
@@ -42,6 +58,22 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_provider(self) -> Settings:
+        speech_url = urlsplit(self.speech_api_base_url)
+        if (
+            not speech_url.hostname
+            or speech_url.username
+            or speech_url.password
+            or speech_url.query
+            or speech_url.fragment
+            or (
+                speech_url.scheme != "https"
+                and not (speech_url.scheme == "http" and speech_url.hostname in {"localhost", "127.0.0.1"})
+            )
+        ):
+            raise ValueError("Invalid speech API URL")
+        from loliland_agent.speech.hotkeys import parse_hotkey
+
+        parse_hotkey(self.ptt_hotkey)
         url = urlsplit(self.api_base_url)
         if not url.hostname or url.username or url.password or url.query or url.fragment:
             raise ValueError("Invalid API URL; credentials belong in API_KEY")

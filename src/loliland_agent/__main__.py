@@ -15,6 +15,7 @@ from loliland_agent.instructions.engine import Copilot
 from loliland_agent.memory import Memory
 from loliland_agent.perception.sources import ReplayEnded, ReplaySource
 from loliland_agent.planning.providers import make_provider
+from loliland_agent.speech.credentials import load_settings
 
 
 def configure_logging() -> None:
@@ -73,7 +74,7 @@ def main() -> int:
     if args.record and args.replay:
         parser.error("--record cannot be combined with --replay")
     try:
-        settings = Settings()
+        settings = load_settings()
     except ValidationError:
         print("Ошибка .env: проверьте провайдера, HTTPS URL, API_KEY и VISION. Значения скрыты.")
         return 2

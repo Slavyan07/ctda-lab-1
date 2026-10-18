@@ -10,6 +10,7 @@ from typing import Any
 from uuid import uuid4
 
 from loliland_agent.config import Settings
+from loliland_agent.conversation.manager import conversation_context
 from loliland_agent.goals.manager import GoalManager
 from loliland_agent.instructions.verifier import CompletionVerifier
 from loliland_agent.memory import Memory
@@ -107,8 +108,10 @@ class Copilot:
                 .model_dump(mode="json")
             )
         return {
+            "conversation": conversation_context(self.memory),
             "pack_version": goal.pack_version if goal else self.settings.pack_version,
             "ready_tasks": [step.id for step in self.goals.ready()],
+            "protected_task_ids": [step.id for step in self.goals.protected_steps()],
             "recipes": [recipe.model_dump(mode="json") for recipe in self.knowledge.all()],
             "observed_resources": self.resources.available(),
             "resources_are_partial_snapshots": True,
@@ -182,6 +185,7 @@ class Copilot:
         self.guard.check(revision)
         goal = self.goals.start(description, self.settings.pack_version, priority)
         self.publish("goal", {"id": goal.id, "description": goal.description})
+        self.snapshot()
         if goal.pending:
             self.publish(
                 "instruction",

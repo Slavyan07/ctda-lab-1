@@ -122,3 +122,18 @@ def test_invalid_replan_keeps_current_instruction_and_valid_replan_cancels_it(me
     assert goals.current.pending == original and goals.current.steps[0].id == "old"
     goals.set_plan(proposal((step("new"),)))
     assert goals.current.pending is None and goals.current.steps[0].id == "new"
+
+
+def test_deferred_work_and_its_prerequisites_survive_new_plan_stages(memory):
+    goals = GoalManager(memory)
+    goals.start("Переработка", "r1")
+    goals.set_plan(proposal((step("energy"), step("magic", depends_on=("energy",)))))
+    current = goals.current
+    goals.replace(
+        current.model_copy(
+            update={"steps": (step("energy"), step("magic", depends_on=("energy",), status="paused"))}
+        )
+    )
+    goals.set_plan(proposal((step("storage"),)))
+    assert {s.id for s in goals.current.steps} == {"energy", "magic", "storage"}
+    assert next(s for s in goals.current.steps if s.id == "magic").status == "paused"
